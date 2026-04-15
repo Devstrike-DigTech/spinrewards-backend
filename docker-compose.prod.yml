@@ -1,0 +1,26 @@
+version: "3.9"
+
+# Production overrides — use with:
+# docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+services:
+  api:
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.production
+    command: gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 4 --timeout 120
+    volumes:
+      - media_data:/app/media
+    # Do not mount source code in production — use the built image
+
+  worker:
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.production
+    command: celery -A config.celery worker --loglevel=warning --concurrency=4
+
+  beat:
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.production
+    command: celery -A config.celery beat --loglevel=warning
+
+volumes:
+  media_data:
