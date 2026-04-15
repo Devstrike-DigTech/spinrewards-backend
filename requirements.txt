@@ -1,0 +1,39 @@
+# Core
+Django==4.2.13
+djangorestframework==3.15.2
+
+# Auth
+djangorestframework-simplejwt==5.3.1
+
+# Database
+psycopg2-binary==2.9.9
+
+# Cache & Queue
+redis==5.0.4
+celery==5.3.6
+django-redis==5.4.0
+
+# CORS
+django-cors-headers==4.3.1
+
+# Filtering
+django-filter==23.5
+
+# Environment variables
+python-decouple==3.8
+
+# HTTP
+requests==2.31.0
+
+# Cryptography (for NIN encryption)
+cryptography==42.0.5
+
+# Image handling (KYC document uploads)
+Pillow==10.3.0
+
+# Production server
+gunicorn==21.2.0
+whitenoise==6.6.0
+
+# Utilities
+python-dateutil==2.9.0
