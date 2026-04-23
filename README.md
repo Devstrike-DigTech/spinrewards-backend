@@ -286,6 +286,6 @@ REDIS_URL=redis://localhost:6379/0   # Use 'redis://redis:6379/0' in Docker.
 
 1. Always work in a feature branch — do not push directly to `main`
 2. Run `python manage.py migrate` after pulling changes that include new migrations
-3. All new business logic goes in `services.py`, not views
+3. All new business logic goes in `services.py`, not views 
 4. Financial operations must use `db_transaction.atomic()`
 5. Any PII (NIN, bank account details) must be handled according to the encryption policy in `common/utils.py`
