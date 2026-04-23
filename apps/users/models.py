@@ -29,7 +29,7 @@ def _generate_referral_code():
 
 class User(AbstractBaseUser, PermissionsMixin):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    telegram_id = models.CharField(max_length=50, unique=True, db_index=True)
+    telegram_id = models.BigIntegerField(unique=True, db_index=True)
     username = models.CharField(max_length=100, blank=True)
     first_name = models.CharField(max_length=100)
     last_name = models.CharField(max_length=100, blank=True)
@@ -55,7 +55,7 @@ class User(AbstractBaseUser, PermissionsMixin):
     objects = UserManager()
 
     USERNAME_FIELD = 'telegram_id'
-    REQUIRED_FIELDS = ['first_name']
+    REQUIRED_FIELDS = []
 
     class Meta:
         db_table = 'users'

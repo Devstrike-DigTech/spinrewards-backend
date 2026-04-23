@@ -37,3 +37,5 @@ whitenoise==6.6.0
 
 # Utilities
 python-dateutil==2.9.0
+
+django-celery-beat==2.6.0

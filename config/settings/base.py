@@ -24,6 +24,7 @@ THIRD_PARTY_APPS = [
     'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
     'django_filters',
+    'django_celery_beat',
 ]
 
 LOCAL_APPS = [
@@ -82,7 +83,7 @@ DATABASES = {
         'PASSWORD': config('DB_PASSWORD'),
         'HOST': config('DB_HOST', default='localhost'),
         'PORT': config('DB_PORT', default='5432'),
-        'ATOMIC_REQUESTS': True,  # Wrap every request in a transaction
+        'ATOMIC_REQUESTS': False,  # Wrap every request in a transaction
     }
 }
 
@@ -129,11 +130,22 @@ REST_FRAMEWORK = {
     'DEFAULT_PAGINATION_CLASS': 'common.pagination.StandardPagination',
     'PAGE_SIZE': 20,
     'EXCEPTION_HANDLER': 'common.exceptions.custom_exception_handler',
+    'DEFAULT_THROTTLE_CLASSES': (
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
+    ),
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '30/minute',
+        'user': '120/minute',
+        'auth': '10/minute',
+        'spin': '60/hour',
+        'withdraw': '5/day',
+    },
 }
 
 # ─── JWT ──────────────────────────────────────────────────────────────────────
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(hours=24),
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=30),
     'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': True,
@@ -180,9 +192,11 @@ ENCRYPTION_KEY = config('ENCRYPTION_KEY')
 # ─── Payments ─────────────────────────────────────────────────────────────────
 PAYSTACK_SECRET_KEY = config('PAYSTACK_SECRET_KEY')
 PAYSTACK_PUBLIC_KEY = config('PAYSTACK_PUBLIC_KEY', default='')
-FLUTTERWAVE_SECRET_KEY = config('FLUTTERWAVE_SECRET_KEY', default='')
-FLUTTERWAVE_SECRET_HASH = config('FLUTTERWAVE_SECRET_HASH', default='')
-
+MONNIFY_API_KEY = config('MONNIFY_API_KEY', default='')
+MONNIFY_SECRET_KEY = config('MONNIFY_SECRET_KEY', default='')
+MONNIFY_CONTRACT_CODE = config('MONNIFY_CONTRACT_CODE', default='')
+NOWPAYMENTS_API_KEY = config('NOWPAYMENTS_API_KEY', default='')
+NOWPAYMENTS_IPN_SECRET = config('NOWPAYMENTS_IPN_SECRET', default='')
 # ─── Frontend URLs ────────────────────────────────────────────────────────────
 MINI_APP_URL = config('MINI_APP_URL', default='http://localhost:5173')
 ADMIN_DASHBOARD_URL = config('ADMIN_DASHBOARD_URL', default='http://localhost:3000')

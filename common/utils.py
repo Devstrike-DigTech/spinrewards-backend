@@ -1,14 +1,16 @@
 import uuid
 import hashlib
+import time
 import hmac
 import secrets
 import string
+from urllib.parse import unquote
 from urllib.parse import parse_qsl
 
 from cryptography.fernet import Fernet
 from django.conf import settings
 
-
+TELEGRAM_AUTH_MAX_AGE_SECONDS = 300 
 # ─── Encryption ───────────────────────────────────────────────────────────────
 
 def _get_fernet() -> Fernet:
@@ -45,38 +47,84 @@ def generate_idempotency_key() -> str:
 
 def validate_telegram_init_data(init_data: str) -> dict:
     """
-    Validate Telegram WebApp initData HMAC signature.
-    Returns parsed user data dict if valid.
+    Validate Telegram WebApp initData HMAC signature and freshness.
+ 
+    Returns parsed key/value dict if valid.
     Raises ValueError if invalid.
-
+ 
     Reference: https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app
+ 
+    Security notes:
+      - We parse the query string manually (not parse_qsl) to avoid any
+        URL-decoding ambiguity that could break HMAC comparison.
+      - auth_date is checked to prevent replay attacks using captured initData.
+      - Empty bot token fails loudly — a missing env var must NEVER silently
+        produce a "valid" HMAC.
     """
     bot_token = settings.TELEGRAM_BOT_TOKEN
-    parsed = dict(parse_qsl(init_data, strict_parsing=True))
-    received_hash = parsed.pop('hash', None)
-
+    if not bot_token:
+        raise ValueError('TELEGRAM_BOT_TOKEN not configured')
+ 
+    if not init_data or not isinstance(init_data, str):
+        raise ValueError('Malformed initData')
+ 
+    # Split manually — do NOT use parse_qsl with strict_parsing=True here,
+    # as it rejects legitimate payloads and its URL-decoding behavior can
+    # corrupt the data-check-string for values containing '+' etc.
+    pairs = []
+    received_hash = None
+    for chunk in init_data.split('&'):
+        if '=' not in chunk:
+            continue
+        key, _, value = chunk.partition('=')
+        if key == 'hash':
+            received_hash = value
+        else:
+            pairs.append((key, value))
+ 
     if not received_hash:
         raise ValueError('Missing hash in initData')
-
-    data_check_string = '\n'.join(
-        f'{k}={v}' for k, v in sorted(parsed.items())
-    )
-
+ 
+    # Per Telegram's spec: build data-check-string from URL-decoded values,
+    # sorted alphabetically by key, joined by newline.
+    decoded_pairs = sorted((k, unquote(v)) for k, v in pairs)
+    data_check_string = '\n'.join(f'{k}={v}' for k, v in decoded_pairs)
+ 
+    # Two-stage HMAC: derive secret key from bot token, then sign data.
     secret_key = hmac.new(
         b'WebAppData',
         bot_token.encode(),
         hashlib.sha256,
     ).digest()
-
+ 
     computed_hash = hmac.new(
         secret_key,
         data_check_string.encode(),
         hashlib.sha256,
     ).hexdigest()
-
+ 
     if not hmac.compare_digest(computed_hash, received_hash):
         raise ValueError('Invalid Telegram signature')
-
+ 
+    # Freshness check — prevents replay of captured initData.
+    parsed = dict(decoded_pairs)
+    auth_date_str = parsed.get('auth_date')
+    if not auth_date_str:
+        raise ValueError('Missing auth_date in initData')
+    try:
+        auth_date = int(auth_date_str)
+    except (TypeError, ValueError):
+        raise ValueError('Malformed auth_date in initData')
+ 
+    now = int(time.time())
+    age = now - auth_date
+    if age < -30:
+        # Small clock skew tolerance; anything significantly in the future
+        # indicates a forged or clock-manipulated payload.
+        raise ValueError('auth_date is in the future')
+    if age > TELEGRAM_AUTH_MAX_AGE_SECONDS:
+        raise ValueError('initData has expired; please reopen the app')
+ 
     return parsed
 
 

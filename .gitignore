@@ -45,3 +45,4 @@ htmlcov/
 # Celery
 celerybeat-schedule
 celerybeat.pid
+test_auth_backend.py
