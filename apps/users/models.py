@@ -6,19 +6,24 @@ from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, Permis
 
 
 class UserManager(BaseUserManager):
-    def create_user(self, telegram_id, **extra_fields):
+    def create_user(self, telegram_id, password=None, **extra_fields):
         if not telegram_id:
             raise ValueError('telegram_id is required')
         user = self.model(telegram_id=telegram_id, **extra_fields)
-        user.set_unusable_password()
+        if password:
+            user.set_password(password)      # hash and store real password
+        else:
+            user.set_unusable_password()     # default for Telegram-auth users
         user.save(using=self._db)
         return user
 
-    def create_superuser(self, telegram_id, **extra_fields):
+    def create_superuser(self, telegram_id, password=None, **extra_fields):
         extra_fields.setdefault('is_admin', True)
         extra_fields.setdefault('is_staff', True)
         extra_fields.setdefault('is_superuser', True)
-        return self.create_user(telegram_id, **extra_fields)
+        if not password:
+            raise ValueError('Superusers must have a password')
+        return self.create_user(telegram_id, password=password, **extra_fields)
 
 
 def _generate_referral_code():
