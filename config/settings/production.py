@@ -51,3 +51,5 @@ LOGGING = {
         },
     },
 }
+
+STATIC_ROOT = '/tmp/staticfiles'
