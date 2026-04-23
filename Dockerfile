@@ -7,6 +7,8 @@ ENV PYTHONUNBUFFERED=1
 # Set working directory
 WORKDIR /app
 
+RUN mkdir -p /app/staticfiles && chmod 755 /app/staticfiles
+
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
