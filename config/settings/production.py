@@ -8,8 +8,8 @@ ALLOWED_HOSTS = config('DJANGO_ALLOWED_HOSTS', default='').split(',')
 # ─── CORS ─────────────────────────────────────────────────────────────────────
 CORS_ALLOWED_ORIGINS = config('CORS_ALLOWED_ORIGINS', default='').split(',')
 CORS_ALLOW_CREDENTIALS = True
-# CSRF_TRUSTED_ORIGINS = config('CSRF_TRUSTED_ORIGINS', default='').split(',')
-CSRF_TRUSTED_ORIGINS = ['https://dev-api.spinrewardsgame.com', 'https://www.dev-api.spinrewardsgame.com',]
+CSRF_TRUSTED_ORIGINS = config('CSRF_TRUSTED_ORIGINS', default='').split(',')
+# CSRF_TRUSTED_ORIGINS = ['https://dev-api.spinrewardsgame.com', 'https://www.dev-api.spinrewardsgame.com',]
 
 # ─── Security ─────────────────────────────────────────────────────────────────
 SECURE_SSL_REDIRECT = True
