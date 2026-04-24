@@ -16,7 +16,7 @@ This is the **single source of truth** for all financial and game operations on 
 - Referral system with first-deposit bonuses
 - Daily login reward streaks
 - Admin APIs for RTP configuration, user management, KYC review, and analytics
-- Async Telegram notifications via Celery
+- Async Telegram notifications via Celery.
 
 ---
 
