@@ -67,6 +67,8 @@ ALLOWED_HOSTS = [
     '127.0.0.1',
     'spinrewardsgame.com',
     'dev-api.spinrewardsgame.com',
+    'admin.spinrewardsgame.com',
+    'plastery-unhampered-erline.ngrok-free.dev',
 ]
 
 # Or parse properly:
@@ -80,6 +82,7 @@ CORS_ALLOWED_ORIGINS = [
     'https://admin.spinrewardsgame.com',
     'https://dev-api.spinrewardsgame.com',
     'https://spinrewardsgame.com',
+    'https://plastery-unhampered-erline.ngrok-free.dev/'
 ]
 CORS_ALLOW_CREDENTIALS = True
 
@@ -88,6 +91,7 @@ CSRF_TRUSTED_ORIGINS = [
     'https://dev-api.spinrewardsgame.com',
     'https://spinrewardsgame.com',
     'https://admin.spinrewardsgame.com',
+    'https://plastery-unhampered-erline.ngrok-free.dev/'
 ]
 
 # ─── Security ─────────────────────────────────────────────────────────────────
