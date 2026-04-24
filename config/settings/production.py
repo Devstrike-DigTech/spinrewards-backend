@@ -54,7 +54,7 @@
 #     },
 # }
 
-# STATIC_ROOT = '/tmp/staticfiles'
+# STATIC_ROOT = '/tmp/staticfiles'  # removed: /tmp is ephemeral in Railway
 
 from .base import *
 from decouple import config
@@ -141,4 +141,4 @@ LOGGING = {
     },
 }
 
-STATIC_ROOT = '/tmp/staticfiles'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
