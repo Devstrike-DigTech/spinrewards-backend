@@ -4,6 +4,8 @@ Base settings shared across all environments.
 from pathlib import Path
 from datetime import timedelta
 from decouple import config
+import dj_database_url
+import os
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
@@ -75,16 +77,23 @@ WSGI_APPLICATION = 'config.wsgi.application'
 ASGI_APPLICATION = 'config.asgi.application'
 
 # ─── Database ─────────────────────────────────────────────────────────────────
+# DATABASES = {
+#     'default': {
+#         'ENGINE': 'django.db.backends.postgresql',
+#         'NAME': config('DB_NAME'),
+#         'USER': config('DB_USER'),
+#         'PASSWORD': config('DB_PASSWORD'),
+#         'HOST': config('DB_HOST', default='localhost'),
+#         'PORT': config('DB_PORT', default='5432'),
+#         'ATOMIC_REQUESTS': False,  # Wrap every request in a transaction
+#     }
+# }
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': config('DB_NAME'),
-        'USER': config('DB_USER'),
-        'PASSWORD': config('DB_PASSWORD'),
-        'HOST': config('DB_HOST', default='localhost'),
-        'PORT': config('DB_PORT', default='5432'),
-        'ATOMIC_REQUESTS': False,  # Wrap every request in a transaction
-    }
+    'default': dj_database_url.config(
+        default=os.environ.get("DATABASE_URL"),
+        conn_max_age=600,
+        ssl_require=True
+    )
 }
 
 # ─── Cache (Redis) ────────────────────────────────────────────────────────────
