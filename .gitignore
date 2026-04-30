@@ -47,3 +47,6 @@ htmlcov/
 celerybeat-schedule
 celerybeat.pid
 test_auth_backend.py
+smoke_test_spin.py
+smoke_test_payments.py
+smoke_test_wallet.py
