@@ -1,8 +1,17 @@
 from django.urls import path
-from .views import KYCSubmitView, KYCStatusView, KYCDocumentView
+
+from .views import (
+    BanksListView,
+    KYCStatusView,
+    KYCSubmitView,
+    ResolveBankView,
+    UploadDocumentView,
+)
 
 urlpatterns = [
-    path('', KYCSubmitView.as_view(), name='kyc-submit'),
+    path('submit/', KYCSubmitView.as_view(), name='kyc-submit'),
+    path('resolve-bank/', ResolveBankView.as_view(), name='kyc-resolve-bank'),
+    path('upload-document/', UploadDocumentView.as_view(), name='kyc-upload-document'),
     path('status/', KYCStatusView.as_view(), name='kyc-status'),
-    path('document/', KYCDocumentView.as_view(), name='kyc-document'),
+    path('banks/', BanksListView.as_view(), name='kyc-banks'),
 ]

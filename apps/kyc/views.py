@@ -1,88 +1,164 @@
-from rest_framework.views import APIView
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.parsers import MultiPartParser, JSONParser
-from rest_framework.response import Response
-from rest_framework import status
+"""
+KYC HTTP endpoints.
 
-from .services import KYCService
-from .models import KYC
-from .serializers import KYCSubmitSerializer, KYCStatusSerializer
+  POST /api/v1/kyc/submit/             Submit/resubmit KYC application
+  POST /api/v1/kyc/resolve-bank/       Live bank account name resolution
+  POST /api/v1/kyc/upload-document/    Upload utility bill or bank statement
+  GET  /api/v1/kyc/status/             Current KYC status (per section)
+  GET  /api/v1/kyc/banks/              List of supported banks (cached 24h)
+"""
+import logging
+
+from django.core.cache import cache
+from rest_framework import status
+from rest_framework.parsers import FormParser, MultiPartParser
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from .providers import get_provider
+from .providers.base import KYCProviderError
+from .serializers import (
+    DocumentUploadSerializer,
+    KYCDocumentResponseSerializer,
+    KYCStatusResponseSerializer,
+    KYCSubmitSerializer,
+    ResolveBankSerializer,
+)
+from .services import KYCService, KYCServiceError
+
+logger = logging.getLogger(__name__)
+
+
+BANKS_CACHE_KEY = 'kyc:banks_list'
+BANKS_CACHE_TTL = 60 * 60 * 24      # 24 hours
 
 
 class KYCSubmitView(APIView):
-    """POST /api/v1/kyc/ — Submit KYC information."""
+    """POST /api/v1/kyc/submit/"""
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
         serializer = KYCSubmitSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        d = serializer.validated_data
 
-        kyc = KYCService.submit(
-            user=request.user,
-            full_name=d['full_name'],
-            nin=d['nin'],
-            dob=d['dob'],
-            bank_account=d['bank_account'],
-            bank_code=d['bank_code'],
+        try:
+            KYCService.submit(
+                user=request.user,
+                payload=serializer.validated_data,
+            )
+        except KYCServiceError as e:
+            return Response(
+                {'error': True, 'code': 'VALIDATION_ERROR', 'message': str(e)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Always return current status snapshot
+        status_data = KYCService.get_status(request.user)
+        return Response(
+            {
+                'success': True,
+                'data': KYCStatusResponseSerializer(status_data).data,
+            },
+            status=status.HTTP_200_OK,
         )
 
-        return Response({
-            'success': True,
-            'data': {
-                'status': kyc.status,
-                'account_name': kyc.account_name,
-                'submitted_at': kyc.submitted_at,
-                'message': 'Your KYC is under review. We\'ll notify you when approved.',
-            }
-        }, status=status.HTTP_201_CREATED)
+
+class ResolveBankView(APIView):
+    """POST /api/v1/kyc/resolve-bank/"""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = ResolveBankSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            result = KYCService.resolve_bank(
+                bank_code=serializer.validated_data['bank_code'],
+                account_number=serializer.validated_data['account_number'],
+            )
+        except KYCServiceError as e:
+            return Response(
+                {'error': True, 'code': 'BANK_RESOLVE_FAILED', 'message': str(e)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(
+            {'success': True, 'data': result},
+            status=status.HTTP_200_OK,
+        )
+
+
+class UploadDocumentView(APIView):
+    """POST /api/v1/kyc/upload-document/"""
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        serializer = DocumentUploadSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            doc = KYCService.upload_document(
+                user=request.user,
+                file=serializer.validated_data['file'],
+                document_type=serializer.validated_data['document_type'],
+            )
+        except KYCServiceError as e:
+            return Response(
+                {'error': True, 'code': 'INVALID_DOCUMENT', 'message': str(e)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(
+            {'success': True, 'data': KYCDocumentResponseSerializer(doc).data},
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class KYCStatusView(APIView):
-    """GET /api/v1/kyc/status/ — Get KYC status."""
+    """GET /api/v1/kyc/status/"""
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        kyc = getattr(request.user, 'kyc', None)
-        if not kyc:
-            return Response({'success': True, 'data': {'status': 'unverified'}})
-        return Response({
-            'success': True,
-            'data': KYCStatusSerializer(kyc).data,
-        })
+        status_data = KYCService.get_status(request.user)
+        return Response(
+            {
+                'success': True,
+                'data': KYCStatusResponseSerializer(status_data).data,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
-class KYCDocumentView(APIView):
-    """POST /api/v1/kyc/document/ — Upload KYC document."""
+class BanksListView(APIView):
+    """
+    GET /api/v1/kyc/banks/
+
+    List of supported Nigerian banks. Cached for 24 hours.
+    """
     permission_classes = [IsAuthenticated]
-    parser_classes = [MultiPartParser]
 
-    def post(self, request):
-        document = request.FILES.get('document')
-        document_type = request.data.get('document_type', '')
+    def get(self, request):
+        banks = cache.get(BANKS_CACHE_KEY)
 
-        if not document:
-            return Response(
-                {'error': True, 'code': 'VALIDATION_ERROR', 'message': 'No document provided.'},
-                status=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            )
+        if banks is None:
+            try:
+                provider = get_provider()
+                banks = provider.list_banks()
+                cache.set(BANKS_CACHE_KEY, banks, BANKS_CACHE_TTL)
+            except KYCProviderError as e:
+                logger.warning('Banks list fetch failed: %s', e)
+                return Response(
+                    {
+                        'error': True,
+                        'code': 'PROVIDER_ERROR',
+                        'message': 'Unable to fetch banks list. Please try again.',
+                    },
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
 
-        kyc = getattr(request.user, 'kyc', None)
-        if not kyc:
-            return Response(
-                {'error': True, 'code': 'NOT_FOUND', 'message': 'Submit KYC information first.'},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
-        # TODO: Upload to cloud storage (S3/Cloudinary) and save URL
-        # For now, save to MEDIA_ROOT
-        from django.core.files.storage import default_storage
-        path = default_storage.save(f'kyc/{request.user.id}/{document.name}', document)
-        kyc.document_url = path
-        kyc.document_type = document_type
-        kyc.save(update_fields=['document_url', 'document_type'])
-
-        return Response({
-            'success': True,
-            'data': {'document_uploaded': True, 'document_type': document_type},
-        })
+        return Response(
+            {'success': True, 'data': {'banks': banks}},
+            status=status.HTTP_200_OK,
+        )

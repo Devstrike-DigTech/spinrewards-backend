@@ -209,7 +209,7 @@ USE_TZ = True
 # ─── Static & Media ───────────────────────────────────────────────────────────
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
-STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+# STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
@@ -233,6 +233,55 @@ NOWPAYMENTS_IPN_SECRET = config('NOWPAYMENTS_IPN_SECRET', default='')
 MINI_APP_URL = config('MINI_APP_URL', default='http://localhost:5173')
 ADMIN_DASHBOARD_URL = config('ADMIN_DASHBOARD_URL', default='http://localhost:3000')
 
+# kyc
+KYC_PROVIDER = config('KYC_PROVIDER', default='stub')
+ENCRYPTION_KEY = config('ENCRYPTION_KEY', default='')
+DOJAH_BASE_URL = config('DOJAH_BASE_URL', default='https://sandbox.dojah.io')
+DOJAH_APP_ID = config('DOJAH_APP_ID', default='')
+DOJAH_SECRET_KEY = config('DOJAH_SECRET_KEY', default='')
+DOJAH_TIMEOUT = config('DOJAH_TIMEOUT', default=10, cast=int)
+
 # ─── Security Headers ─────────────────────────────────────────────────────────
 SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = 'DENY'
+
+# R2 cloudfare configuration
+# Storage configuration — R2 in production, local in dev
+USE_R2 = config('USE_R2', default=False, cast=bool)
+
+if USE_R2:
+    # Cloudflare R2 for media files (KYC documents)
+    STORAGES = {
+        'default': {
+            'BACKEND': 'storages.backends.s3boto3.S3Boto3Storage',
+        },
+        'staticfiles': {
+            'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage',
+        },
+    }
+
+
+    AWS_ACCESS_KEY_ID = config('R2_ACCESS_KEY_ID', default='')
+    AWS_SECRET_ACCESS_KEY = config('R2_SECRET_ACCESS_KEY', default='')
+    AWS_STORAGE_BUCKET_NAME = config('R2_BUCKET_NAME', default='spinrewards-kyc')
+    AWS_S3_ENDPOINT_URL = config('R2_ENDPOINT_URL', default='')
+
+    AWS_S3_REGION_NAME = 'auto'         # R2 uses 'auto'
+    AWS_S3_FILE_OVERWRITE = False
+    AWS_DEFAULT_ACL = 'private'         # files are private
+    AWS_QUERYSTRING_AUTH = True         # signed URLs only
+    AWS_QUERYSTRING_EXPIRE = 300        # 5-minute expiry
+    AWS_S3_SIGNATURE_VERSION = 's3v4'
+
+    AWS_LOCATION = config('R2_LOCATION', default='kyc')
+
+else:
+    # Local development — filesystem for media, whitenoise for static
+    STORAGES = {
+        'default': {
+            'BACKEND': 'django.core.files.storage.FileSystemStorage',
+        },
+        'staticfiles': {
+            'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage',
+        },
+    }
