@@ -195,6 +195,7 @@ class Transaction(models.Model):
         REFERRAL_BONUS = 'referral_bonus', 'Referral Bonus'
         DAILY_REWARD = 'daily_reward', 'Daily Reward'
         REVERSAL = 'reversal', 'Reversal'
+        REFUND = 'refund', 'Refund'
 
     class BalanceType(models.TextChoices):
         COIN = 'coin', 'Coin'      # play currency, not withdrawable
