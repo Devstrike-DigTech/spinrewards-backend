@@ -241,6 +241,15 @@ DOJAH_APP_ID = config('DOJAH_APP_ID', default='')
 DOJAH_SECRET_KEY = config('DOJAH_SECRET_KEY', default='')
 DOJAH_TIMEOUT = config('DOJAH_TIMEOUT', default=10, cast=int)
 
+
+# withdrawal
+WITHDRAWAL_PROVIDER = config('WITHDRAWAL_PROVIDER', default='stub')
+WITHDRAWAL_MIN_AMOUNT = config('WITHDRAWAL_MIN_AMOUNT', default='1000.00')
+WITHDRAWAL_MAX_PER_TXN = config('WITHDRAWAL_MAX_PER_TXN', default='100000.00')
+WITHDRAWAL_MAX_DAILY = config('WITHDRAWAL_MAX_DAILY', default='100000.00')
+WITHDRAWAL_MAX_DAILY_COUNT = config('WITHDRAWAL_MAX_DAILY_COUNT', default=3, cast=int)
+WITHDRAWAL_AUTO_THRESHOLD = config('WITHDRAWAL_AUTO_THRESHOLD', default='10000.00')
+
 # ─── Security Headers ─────────────────────────────────────────────────────────
 SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = 'DENY'

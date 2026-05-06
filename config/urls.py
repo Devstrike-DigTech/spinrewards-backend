@@ -13,7 +13,7 @@ urlpatterns = [
         path('wallet/', include('apps.wallet.urls')),
         path('spin/', include('apps.spin.urls')),
         path('deposits/', include('apps.payments.urls')),
-        # path('withdrawals/', include('apps.withdrawals.urls')),
+        path('withdrawals/', include('apps.withdrawals.urls')),
         path('kyc/', include('apps.kyc.urls')),
         path('referral/', include('apps.referrals.urls')),
         path('rewards/', include('apps.rewards.urls')),
