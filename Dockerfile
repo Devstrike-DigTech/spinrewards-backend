@@ -21,6 +21,7 @@ RUN mkdir -p /app/staticfiles && chmod 755 /app/staticfiles
 
 RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser
 RUN chown -R appuser:appgroup /app
+RUN mkdir -p /app/media && chmod 755 /app/media
 USER appuser
 
 EXPOSE 8000

@@ -233,6 +233,14 @@ NOWPAYMENTS_IPN_SECRET = config('NOWPAYMENTS_IPN_SECRET', default='')
 MINI_APP_URL = config('MINI_APP_URL', default='http://localhost:5173')
 ADMIN_DASHBOARD_URL = config('ADMIN_DASHBOARD_URL', default='http://localhost:3000')
 
+# kyc
+KYC_PROVIDER = config('KYC_PROVIDER', default='stub')
+ENCRYPTION_KEY = config('ENCRYPTION_KEY', default='')
+DOJAH_BASE_URL = config('DOJAH_BASE_URL', default='https://sandbox.dojah.io')
+DOJAH_APP_ID = config('DOJAH_APP_ID', default='')
+DOJAH_SECRET_KEY = config('DOJAH_SECRET_KEY', default='')
+DOJAH_TIMEOUT = config('DOJAH_TIMEOUT', default=10, cast=int)
+
 # ─── Security Headers ─────────────────────────────────────────────────────────
 SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = 'DENY'
