@@ -4,21 +4,27 @@ Dojah KYC provider.
 Dojah API docs: https://docs.dojah.io/
 
 Endpoints used:
-  GET  /api/v1/kyc/nin                           NIN lookup
-  GET  /api/v1/kyc/bvn                           BVN lookup
-  GET  /api/v1/general/banks                     List Nigerian banks
-  GET  /api/v1/wallet/account/resolve            Resolve account name
+  GET  /api/v1/kyc/nin                                  NIN lookup
+  GET  /api/v1/kyc/bvn                                  BVN lookup
+  GET  /api/v1/general/banks                            List Nigerian banks
+  GET  /api/v1/general/resolveaccountnumber             Resolve account name
+
+  NOTE: Bank account resolution can ALSO be done via Paystack as a fallback
+  since Paystack's /bank/resolve is very reliable. Set
+  BANK_RESOLVE_PROVIDER=paystack in settings to use Paystack instead of Dojah
+  for this specific step. Default is Dojah.
 
 Authentication:
   Authorization: <DOJAH_SECRET_KEY>
   AppId:         <DOJAH_APP_ID>
 
 Configure via Django settings:
-  DOJAH_BASE_URL    Sandbox: https://sandbox.dojah.io
-                    Production: https://api.dojah.io
+  DOJAH_BASE_URL         Sandbox: https://sandbox.dojah.io
+                         Production: https://api.dojah.io
   DOJAH_APP_ID
   DOJAH_SECRET_KEY
-  DOJAH_TIMEOUT     Default 10 (seconds)
+  DOJAH_TIMEOUT          Default 10 (seconds)
+  BANK_RESOLVE_PROVIDER  'dojah' (default) or 'paystack'
 """
 import logging
 
@@ -172,8 +178,25 @@ class DojahProvider(KYCProvider):
                 f'{len(account_number) if account_number else 0}'
             )
 
+        # Allow switching to Paystack for bank resolution — more reliable
+        # for some banks. Set BANK_RESOLVE_PROVIDER=paystack in settings.
+        resolve_provider = getattr(settings, 'BANK_RESOLVE_PROVIDER', 'dojah')
+        if resolve_provider == 'paystack':
+            return self._resolve_via_paystack(account_number, bank_code)
+
+        return self._resolve_via_dojah(account_number, bank_code)
+
+    def _resolve_via_dojah(
+        self, account_number: str, bank_code: str,
+    ) -> BankAccountResolveResult:
+        """
+        Resolve bank account via Dojah.
+
+        Correct endpoint: /api/v1/general/resolveaccountnumber
+        Params: account_number, bank_code
+        """
         body = self._get(
-            '/api/v1/wallet/account/resolve',
+            '/api/v1/general/resolveaccountnumber',
             params={
                 'account_number': account_number,
                 'bank_code': bank_code,
@@ -186,10 +209,75 @@ class DojahProvider(KYCProvider):
                 f'Bank account resolution returned no data: ***{account_number[-4:]}'
             )
 
-        account_name = (entity.get('account_name', '') or '').strip().upper()
+        # Dojah may return account_name directly or nested
+        account_name = (
+            entity.get('account_name', '') or
+            entity.get('name', '')
+        )
+        account_name = (account_name or '').strip().upper()
+
         if not account_name:
             raise KYCProviderError(
                 f'Bank account resolution returned empty name: ***{account_number[-4:]}'
+            )
+
+        return BankAccountResolveResult(
+            account_number=account_number,
+            bank_code=bank_code,
+            account_name=account_name,
+            raw_response=body,
+        )
+
+    def _resolve_via_paystack(
+        self, account_number: str, bank_code: str,
+    ) -> BankAccountResolveResult:
+        """
+        Fallback: resolve bank account via Paystack /bank/resolve.
+
+        More reliable for some Nigerian banks. Requires PAYSTACK_SECRET_KEY.
+        """
+        import requests as req
+
+        paystack_secret = getattr(settings, 'PAYSTACK_SECRET_KEY', '')
+        if not paystack_secret:
+            raise KYCProviderError(
+                'PAYSTACK_SECRET_KEY required for Paystack bank resolution.'
+            )
+
+        try:
+            response = req.get(
+                'https://api.paystack.co/bank/resolve',
+                headers={
+                    'Authorization': f'Bearer {paystack_secret}',
+                    'Content-Type': 'application/json',
+                },
+                params={
+                    'account_number': account_number,
+                    'bank_code': bank_code,
+                },
+                timeout=10,
+            )
+        except req.Timeout:
+            raise KYCProviderError('Paystack bank resolve timeout')
+        except req.RequestException as e:
+            raise KYCProviderError(f'Paystack bank resolve unreachable: {e}')
+
+        try:
+            body = response.json()
+        except ValueError:
+            raise KYCProviderError('Paystack bank resolve returned non-JSON')
+
+        if not body.get('status'):
+            raise KYCProviderError(
+                f'Paystack bank resolve failed: {body.get("message", "unknown")}'
+            )
+
+        data = body.get('data', {})
+        account_name = (data.get('account_name', '') or '').strip().upper()
+
+        if not account_name:
+            raise KYCProviderError(
+                f'Paystack bank resolve returned empty name: ***{account_number[-4:]}'
             )
 
         return BankAccountResolveResult(
