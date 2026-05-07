@@ -240,6 +240,7 @@ DOJAH_BASE_URL = config('DOJAH_BASE_URL', default='https://sandbox.dojah.io')
 DOJAH_APP_ID = config('DOJAH_APP_ID', default='')
 DOJAH_SECRET_KEY = config('DOJAH_SECRET_KEY', default='')
 DOJAH_TIMEOUT = config('DOJAH_TIMEOUT', default=10, cast=int)
+BANK_RESOLVE_PROVIDER = config('BANK_RESOLVE_PROVIDER', default='dojah')
 
 
 # withdrawal
