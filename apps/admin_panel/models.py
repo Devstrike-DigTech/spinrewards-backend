@@ -1,40 +1,49 @@
-# import uuid
-# from django.db import models
+"""
+AdminProfile model.
+
+Stores email + password for admin dashboard login.
+Linked one-to-one to the main User model.
+The linked User must have is_staff=True.
+"""
+import uuid
+
+from django.contrib.auth.hashers import check_password, make_password
+from django.db import models
 
 
-# class AdminAuditLog(models.Model):
-#     """
-#     Immutable record of every admin action.
-#     Never update or delete these records.
-#     """
-#     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-#     admin = models.ForeignKey(
-#         'users.User', on_delete=models.SET_NULL, null=True,
-#         related_name='audit_logs',
-#     )
-#     action = models.CharField(
-#         max_length=100,
-#         help_text='e.g. rtp_tier_updated, kyc_approved, user_suspended',
-#     )
-#     target_model = models.CharField(max_length=100, blank=True)
-#     target_id = models.CharField(max_length=100, blank=True)
-#     previous_state = models.JSONField(null=True, blank=True)
-#     new_state = models.JSONField(null=True, blank=True)
-#     ip_address = models.GenericIPAddressField(null=True, blank=True)
-#     created_at = models.DateTimeField(auto_now_add=True)
+class AdminProfile(models.Model):
+    """
+    Admin credentials for dashboard login.
 
-#     class Meta:
-#         db_table = 'admin_audit_logs'
-#         ordering = ['-created_at']
+    Separate from the Telegram User model so we don't pollute
+    the core user model with admin-only fields.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.OneToOneField(
+        'users.User',
+        on_delete=models.CASCADE,
+        related_name='admin_profile',
+    )
+    email = models.EmailField(unique=True, db_index=True)
+    hashed_password = models.CharField(max_length=256)
+    display_name = models.CharField(max_length=100, blank=True)
 
-#     def __str__(self):
-#         return f'AuditLog({self.admin}, {self.action}, {self.created_at})'
+    is_active = models.BooleanField(default=True)
+    last_login_at = models.DateTimeField(null=True, blank=True)
 
-#     def save(self, *args, **kwargs):
-#         # Prevent updates — audit logs are immutable
-#         if self.pk and AdminAuditLog.objects.filter(pk=self.pk).exists():
-#             raise PermissionError('Audit logs are immutable and cannot be updated.')
-#         super().save(*args, **kwargs)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
-#     def delete(self, *args, **kwargs):
-#         raise PermissionError('Audit logs cannot be deleted.')
+    class Meta:
+        db_table = 'admin_profiles'
+
+    def __str__(self):
+        return f'AdminProfile({self.email})'
+
+    def set_password(self, raw_password: str):
+        """Hash and store the password."""
+        self.hashed_password = make_password(raw_password)
+
+    def check_password(self, raw_password: str) -> bool:
+        """Verify a raw password against the stored hash."""
+        return check_password(raw_password, self.hashed_password)
