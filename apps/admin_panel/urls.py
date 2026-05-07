@@ -5,6 +5,9 @@ All prefixed with /api/v1/admin/ in config/urls.py.
 """
 from django.urls import path
 
+from apps.admin_panel.auth_views import AdminChangePasswordView, AdminLoginView, AdminLogoutView, AdminMeView
+
+
 from .views import (
     AdminAuditLogsView,
     AdminFraudMonitorView,
@@ -25,6 +28,11 @@ from .views import (
 )
 
 urlpatterns = [
+     #Auth — email + password login (no token required)
+    path('auth/login/', AdminLoginView.as_view(), name='admin-login'),
+    path('auth/logout/', AdminLogoutView.as_view(), name='admin-logout'),
+    path('auth/me/', AdminMeView.as_view(), name='admin-me'),
+    path('auth/change-password/', AdminChangePasswordView.as_view(), name='admin-change-password'),
     # Screen 1 — Dashboard
     path('dashboard/', DashboardView.as_view(), name='admin-dashboard'),
 
