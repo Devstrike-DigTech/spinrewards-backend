@@ -708,6 +708,10 @@ class AdminUserSpinsView(APIView):
     GET /api/v1/admin/users/<user_id>/spins/
 
     Paginated spin history for a specific user.
+
+    Query params:
+      outcome   win | loss | push | partial_loss
+      page
     """
     permission_classes = [IsAdminUser]
 
@@ -725,6 +729,12 @@ class AdminUserSpinsView(APIView):
         spins = Spin.objects.filter(user=user).select_related(
             'wheel', 'segment_landed'
         ).order_by('-created_at')
+
+        # Filter by outcome if provided
+        # ?outcome=win | ?outcome=loss | ?outcome=push | ?outcome=partial_loss
+        outcome_filter = request.query_params.get('outcome', '').strip()
+        if outcome_filter:
+            spins = spins.filter(outcome=outcome_filter)
 
         paginator = AdminPagination()
         page = paginator.paginate_queryset(spins, request)
@@ -760,6 +770,10 @@ class AdminUserTransactionsView(APIView):
     GET /api/v1/admin/users/<user_id>/transactions/
 
     Paginated wallet transaction history for a specific user.
+
+    Query params:
+      type    deposit | withdrawal | spin_stake | spin_win | refund
+      page
     """
     permission_classes = [IsAdminUser]
 
@@ -775,6 +789,21 @@ class AdminUserTransactionsView(APIView):
             )
 
         txs = Transaction.objects.filter(user=user).order_by('-created_at')
+
+        # Filter by type if provided
+        # ?type=deposit | ?type=withdrawal | ?type=spin_stake | ?type=spin_win
+        # spin_stake maps to DB type=stake, spin_win maps to DB type=win
+        TYPE_FILTER_MAP = {
+            'deposit': 'deposit',
+            'withdrawal': 'withdrawal',
+            'spin_stake': 'stake',
+            'spin_win': 'win',
+            'refund': 'refund',
+        }
+        type_filter = request.query_params.get('type', '').strip()
+        if type_filter:
+            db_type = TYPE_FILTER_MAP.get(type_filter, type_filter)
+            txs = txs.filter(type=db_type)
 
         paginator = AdminPagination()
         page = paginator.paginate_queryset(txs, request)
