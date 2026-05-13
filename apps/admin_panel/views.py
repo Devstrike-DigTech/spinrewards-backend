@@ -56,11 +56,16 @@ class DashboardView(APIView):
     """
     GET /api/v1/admin/dashboard/
 
+    Query params:
+      period    7d | 30d | 90d | 365d | all (default: 30d)
+      month     YYYY-MM  (e.g. 2026-05) — show daily breakdown for that month
+
     Returns:
-      kpis            Total Revenue, Net Profit, Current RTP, Active Users
-      profit_trend    Monthly bar chart data (12 months)
-      recent_spins    Last 10 spins across all users
-      top_winners     Top 10 users by total winnings
+      kpis              Total Revenue (staking), Net Profit (GGR), Realized
+                        House Edge, Player Win Rate, Active Users
+      graph             Monthly data (if period) or daily data (if month)
+      recent_spins      Last 10 spins
+      top_winners       Top 10 users by total winnings
     """
     permission_classes = [IsAdminUser]
 
@@ -68,70 +73,162 @@ class DashboardView(APIView):
         from apps.spin.models import Spin
         from apps.wallet.models import Transaction
         from apps.withdrawals.models import Withdrawal
+        from django.db.models.functions import TruncDay, TruncMonth
 
         now = timezone.now()
-        thirty_days_ago = now - timedelta(days=30)
-        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        this_month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        last_month_start = (this_month_start - timedelta(days=1)).replace(day=1)
+
+        # ── Parse period / month param ────────────────────────────────
+        period = request.query_params.get('period', '30d').strip()
+        month_param = request.query_params.get('month', '').strip()
+
+        PERIOD_MAP = {
+            '7d': 7, '30d': 30, '90d': 90, '365d': 365, 'all': None,
+        }
+
+        if month_param:
+            # Daily breakdown for a specific month e.g. 2026-05
+            try:
+                from datetime import datetime
+                month_dt = datetime.strptime(month_param, '%Y-%m')
+                period_start = timezone.make_aware(month_dt.replace(day=1))
+                # Last day of month
+                import calendar
+                last_day = calendar.monthrange(month_dt.year, month_dt.month)[1]
+                period_end = timezone.make_aware(
+                    month_dt.replace(day=last_day, hour=23, minute=59, second=59)
+                )
+            except ValueError:
+                return Response(
+                    {'error': True, 'code': 'INVALID_MONTH',
+                     'message': 'month must be in YYYY-MM format.'},
+                    status=400,
+                )
+            use_daily = True
+        else:
+            days = PERIOD_MAP.get(period, 30)
+            period_start = (now - timedelta(days=days)) if days else None
+            period_end = now
+            use_daily = False
+
+        # ── Build filtered querysets ───────────────────────────────────
+        def _filter(qs, date_field='created_at'):
+            if period_start:
+                qs = qs.filter(**{f'{date_field}__gte': period_start})
+            if period_end and month_param:
+                qs = qs.filter(**{f'{date_field}__lte': period_end})
+            return qs
 
         # ── KPIs ──────────────────────────────────────────────────────
-        # Total Revenue = all completed deposit amounts
-        total_revenue = Transaction.objects.filter(
-            type='deposit', status='completed',
-        ).aggregate(t=Sum('amount'))['t'] or Decimal('0')
+        # Total Revenue = total amount staked in the period
+        spins_qs = _filter(Spin.objects.all())
+        total_staked = spins_qs.aggregate(t=Sum('stake_amount'))['t'] or Decimal('0')
+        total_won = spins_qs.filter(outcome='win').aggregate(
+            t=Sum('payout_amount')
+        )['t'] or Decimal('0')
 
-        # Net Profit = Revenue - total paid out to users
-        total_paid_out = Withdrawal.objects.filter(
-            status='completed',
-        ).aggregate(t=Sum('net_amount'))['t'] or Decimal('0')
-        net_profit = total_revenue - total_paid_out
+        # GGR = total staked - total won
+        ggr = total_staked - total_won
 
-        # Active users (logged in last 30 days)
-        active_users = User.objects.filter(
-            last_login__gte=thirty_days_ago
-        ).count()
+        # Realized house edge = (staked - won) / staked * 100
+        realized_house_edge = (
+            round(float(ggr / total_staked) * 100, 2)
+            if total_staked > 0 else Decimal('0')
+        )
+
+        # Player win rate = winning spins / total spins * 100
+        total_spins = spins_qs.count()
+        winning_spins = spins_qs.filter(outcome='win').count()
+        player_win_rate = (
+            round((winning_spins / total_spins) * 100, 1)
+            if total_spins > 0 else 0
+        )
+
+        # Active users in period
+        active_users_qs = User.objects.all()
+        if period_start:
+            active_users_qs = active_users_qs.filter(last_login__gte=period_start)
+        active_users = active_users_qs.count()
+
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         new_today = User.objects.filter(created_at__gte=today_start).count()
 
-        # Current RTP from spins last 30 days
-        recent_spins_qs = Spin.objects.filter(created_at__gte=thirty_days_ago)
-        total_staked = recent_spins_qs.aggregate(
-            t=Sum('stake_amount')
-        )['t'] or Decimal('1')
-        total_won = recent_spins_qs.filter(
-            outcome='win'
-        ).aggregate(t=Sum('payout_amount'))['t'] or Decimal('0')
-        current_rtp = round(float(total_won / total_staked) * 100, 1)
+        # ── Percentage change vs previous period ──────────────────────
+        if period_start and not month_param:
+            period_length = (now - period_start).total_seconds()
+            prev_start = period_start - timedelta(seconds=period_length)
+            prev_end = period_start
 
-        # Month-over-month changes
-        rev_this_month = Transaction.objects.filter(
-            type='deposit', status='completed',
-            created_at__gte=this_month_start,
-        ).aggregate(t=Sum('amount'))['t'] or Decimal('0')
-        rev_last_month = Transaction.objects.filter(
-            type='deposit', status='completed',
-            created_at__gte=last_month_start,
-            created_at__lt=this_month_start,
-        ).aggregate(t=Sum('amount'))['t'] or Decimal('0')
-        revenue_change = pct_change(rev_this_month, rev_last_month)
+            prev_staked = Spin.objects.filter(
+                created_at__gte=prev_start,
+                created_at__lt=prev_end,
+            ).aggregate(t=Sum('stake_amount'))['t'] or Decimal('0')
 
-        active_this_month = User.objects.filter(
-            last_login__gte=this_month_start
-        ).count()
-        active_last_month = User.objects.filter(
-            last_login__gte=last_month_start,
-            last_login__lt=this_month_start,
-        ).count()
-        user_change = pct_change(
-            Decimal(active_this_month), Decimal(active_last_month or 1)
-        )
+            prev_won = Spin.objects.filter(
+                created_at__gte=prev_start,
+                created_at__lt=prev_end,
+                outcome='win',
+            ).aggregate(t=Sum('payout_amount'))['t'] or Decimal('0')
+            prev_ggr = prev_staked - prev_won
 
-        # ── Profit Trend (12 months) ──────────────────────────────────
-        profit_trend = monthly_aggregation(
-            Transaction.objects.filter(type='deposit', status='completed'),
-            value_field='amount',
-            months=12,
-        )
+            revenue_change = pct_change(total_staked, prev_staked)
+            ggr_change = pct_change(ggr, prev_ggr)
+        else:
+            revenue_change = '0'
+            ggr_change = '0'
+
+        # ── Graph data ─────────────────────────────────────────────────
+        if use_daily:
+            # Daily breakdown for the selected month
+            graph_data = []
+            daily_qs = (
+                spins_qs
+                .annotate(day=TruncDay('created_at'))
+                .values('day')
+                .annotate(
+                    staked=Sum('stake_amount'),
+                    won=Sum('payout_amount'),
+                    spin_count=Count('id'),
+                )
+                .order_by('day')
+            )
+            for row in daily_qs:
+                day_staked = row['staked'] or Decimal('0')
+                day_won = row['won'] or Decimal('0')
+                graph_data.append({
+                    'date': row['day'].strftime('%-d %b') if row['day'] else '',
+                    'staked': str(day_staked),
+                    'won': str(day_won),
+                    'ggr': str(day_staked - day_won),
+                    'spins': row['spin_count'],
+                })
+        else:
+            # Monthly aggregation
+            months = 12 if period in ('365d', 'all') else (
+                3 if period == '90d' else 1
+            )
+            graph_data = []
+            monthly_qs = (
+                spins_qs
+                .annotate(month=TruncMonth('created_at'))
+                .values('month')
+                .annotate(
+                    staked=Sum('stake_amount'),
+                    won=Sum('payout_amount'),
+                    spin_count=Count('id'),
+                )
+                .order_by('month')
+            )
+            for row in monthly_qs:
+                m_staked = row['staked'] or Decimal('0')
+                m_won = row['won'] or Decimal('0')
+                graph_data.append({
+                    'month': row['month'].strftime('%b') if row['month'] else '',
+                    'year': row['month'].year if row['month'] else '',
+                    'staked': str(m_staked),
+                    'won': str(m_won),
+                    'ggr': str(m_staked - m_won),
+                    'spins': row['spin_count'],
+                })
 
         # ── Recent Spins (last 10) ────────────────────────────────────
         recent_spins = []
@@ -155,10 +252,10 @@ class DashboardView(APIView):
                 'date': spin.created_at.strftime('%b %-d, %Y'),
             })
 
-        # ── Top Winners (by total winnings) ───────────────────────────
+        # ── Top Winners ────────────────────────────────────────────────
         top_winners = []
         top_qs = (
-            Spin.objects.filter(outcome='win')
+            spins_qs.filter(outcome='win')
             .values('user_id')
             .annotate(total_won=Sum('payout_amount'))
             .order_by('-total_won')[:10]
@@ -176,16 +273,21 @@ class DashboardView(APIView):
         return Response({
             'success': True,
             'data': {
+                'period': period,
+                'month': month_param or None,
                 'kpis': {
-                    'total_revenue': str(total_revenue),
+                    'total_revenue': str(total_staked),
                     'total_revenue_change_pct': revenue_change,
-                    'net_profit': str(net_profit),
-                    'current_rtp': f'{current_rtp}%',
+                    'net_profit_ggr': str(ggr),
+                    'net_profit_ggr_change_pct': ggr_change,
+                    'realized_house_edge_pct': str(realized_house_edge),
+                    'player_win_rate_pct': str(player_win_rate),
+                    'total_spins': total_spins,
+                    'winning_spins': winning_spins,
                     'active_users': active_users,
-                    'active_users_change_pct': user_change,
                     'new_users_today': new_today,
                 },
-                'profit_trend': profit_trend,
+                'graph': graph_data,
                 'recent_spins': recent_spins,
                 'top_winners': top_winners,
             },
@@ -200,10 +302,11 @@ class FinancialsView(APIView):
     """
     GET /api/v1/admin/financials/
 
-    Returns:
-      kpis              Total Deposits, Total Withdrawals, Pending Withdrawals
-      spins_breakdown   Staked / Won / House Fees (for donut chart)
-      cash_flow         Monthly line chart (12 months)
+    Query params:
+      period    7d | 30d | 90d | 365d | all (default: 30d)
+      month     YYYY-MM — show daily breakdown for cash flow / GGR trend
+
+    Returns all 7 financial sections per spec.
     """
     permission_classes = [IsAdminUser]
 
@@ -211,94 +314,281 @@ class FinancialsView(APIView):
         from apps.spin.models import Spin
         from apps.wallet.models import Transaction
         from apps.withdrawals.models import Withdrawal
+        from django.db.models.functions import TruncDay, TruncMonth
 
         now = timezone.now()
-        thirty_days_ago = now - timedelta(days=30)
-        this_month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        last_month_start = (this_month_start - timedelta(days=1)).replace(day=1)
 
-        # ── KPIs ──────────────────────────────────────────────────────
-        total_deposits = Transaction.objects.filter(
-            type='deposit', status='completed',
+        # ── Parse period / month param ─────────────────────────────────
+        period = request.query_params.get('period', '30d').strip()
+        month_param = request.query_params.get('month', '').strip()
+
+        PERIOD_MAP = {'7d': 7, '30d': 30, '90d': 90, '365d': 365, 'all': None}
+
+        if month_param:
+            try:
+                from datetime import datetime
+                import calendar
+                month_dt = datetime.strptime(month_param, '%Y-%m')
+                period_start = timezone.make_aware(month_dt.replace(day=1))
+                last_day = calendar.monthrange(month_dt.year, month_dt.month)[1]
+                period_end = timezone.make_aware(
+                    month_dt.replace(day=last_day, hour=23, minute=59, second=59)
+                )
+            except ValueError:
+                return Response(
+                    {'error': True, 'code': 'INVALID_MONTH',
+                     'message': 'month must be YYYY-MM format.'},
+                    status=400,
+                )
+            use_daily = True
+        else:
+            days = PERIOD_MAP.get(period, 30)
+            period_start = (now - timedelta(days=days)) if days else None
+            period_end = now
+            use_daily = False
+
+        def _filter_qs(qs, date_field='created_at'):
+            if period_start:
+                qs = qs.filter(**{f'{date_field}__gte': period_start})
+            if month_param and period_end:
+                qs = qs.filter(**{f'{date_field}__lte': period_end})
+            return qs
+
+        # Previous period for % change
+        if period_start and not month_param:
+            period_seconds = (now - period_start).total_seconds()
+            prev_start = period_start - timedelta(seconds=period_seconds)
+            prev_end = period_start
+        else:
+            prev_start = prev_end = None
+
+        def _prev_qs(qs, date_field='created_at'):
+            if prev_start and prev_end:
+                return qs.filter(**{
+                    f'{date_field}__gte': prev_start,
+                    f'{date_field}__lt': prev_end,
+                })
+            return qs.none()
+
+        # ── 1. DEPOSITS ────────────────────────────────────────────────
+        dep_qs = _filter_qs(
+            Transaction.objects.filter(type='deposit', status='completed')
+        )
+        total_deposit_amount = dep_qs.aggregate(t=Sum('amount'))['t'] or Decimal('0')
+        total_deposit_count = dep_qs.count()
+        avg_deposit = (
+            total_deposit_amount / total_deposit_count
+            if total_deposit_count else Decimal('0')
+        )
+
+        prev_dep_amount = _prev_qs(
+            Transaction.objects.filter(type='deposit', status='completed')
         ).aggregate(t=Sum('amount'))['t'] or Decimal('0')
 
-        total_withdrawals = Withdrawal.objects.filter(
-            status='completed',
+        # Net position = all deposits - all withdrawals (all time)
+        total_deposited_ever = Transaction.objects.filter(
+            type='deposit', status='completed'
+        ).aggregate(t=Sum('amount'))['t'] or Decimal('0')
+        total_withdrawn_ever = Withdrawal.objects.filter(
+            status='completed'
+        ).aggregate(t=Sum('net_amount'))['t'] or Decimal('0')
+        net_position = total_deposited_ever - total_withdrawn_ever
+
+        # ── 2. WITHDRAWALS ─────────────────────────────────────────────
+        wd_qs = _filter_qs(
+            Withdrawal.objects.filter(status='completed'), date_field='completed_at'
+        )
+        total_wd_amount = wd_qs.aggregate(t=Sum('net_amount'))['t'] or Decimal('0')
+        total_wd_count = wd_qs.count()
+
+        prev_wd_amount = _prev_qs(
+            Withdrawal.objects.filter(status='completed'), date_field='completed_at'
         ).aggregate(t=Sum('net_amount'))['t'] or Decimal('0')
 
-        pending_withdrawals = Withdrawal.objects.filter(
+        pct_of_deposits = (
+            round(float(total_wd_amount / total_deposit_amount) * 100, 1)
+            if total_deposit_amount > 0 else 0
+        )
+
+        pending_wd_amount = Withdrawal.objects.filter(
             status__in=['pending_review', 'pending', 'processing'],
         ).aggregate(t=Sum('amount'))['t'] or Decimal('0')
+        pending_wd_count = Withdrawal.objects.filter(
+            status='pending_review',
+        ).count()
 
-        # Month-over-month changes
-        dep_this = Transaction.objects.filter(
-            type='deposit', status='completed',
-            created_at__gte=this_month_start,
-        ).aggregate(t=Sum('amount'))['t'] or Decimal('0')
-        dep_last = Transaction.objects.filter(
-            type='deposit', status='completed',
-            created_at__gte=last_month_start,
-            created_at__lt=this_month_start,
-        ).aggregate(t=Sum('amount'))['t'] or Decimal('0')
+        # Rate of successful withdrawals
+        all_wd = _filter_qs(Withdrawal.objects.all(), date_field='requested_at')
+        all_wd_count = all_wd.count()
+        success_rate = (
+            round((total_wd_count / all_wd_count) * 100, 1)
+            if all_wd_count else 0
+        )
 
-        wd_this = Withdrawal.objects.filter(
-            status='completed', completed_at__gte=this_month_start,
-        ).aggregate(t=Sum('net_amount'))['t'] or Decimal('0')
-        wd_last = Withdrawal.objects.filter(
-            status='completed',
-            completed_at__gte=last_month_start,
-            completed_at__lt=this_month_start,
-        ).aggregate(t=Sum('net_amount'))['t'] or Decimal('0')
+        # ── 3. SPINS ──────────────────────────────────────────────────
+        spins_qs = _filter_qs(Spin.objects.all())
+        total_spins = spins_qs.count()
+        wins_count = spins_qs.filter(outcome='win').count()
+        losses_count = spins_qs.filter(outcome='loss').count()
+        win_rate = round((wins_count / total_spins) * 100, 1) if total_spins else 0
 
-        # ── Spins breakdown (for donut chart) ─────────────────────────
-        spins_qs = Spin.objects.filter(created_at__gte=thirty_days_ago)
-        total_staked = spins_qs.aggregate(
-            t=Sum('stake_amount')
-        )['t'] or Decimal('0')
-        total_won = spins_qs.filter(
+        spins_staked = spins_qs.aggregate(t=Sum('stake_amount'))['t'] or Decimal('0')
+        avg_stake_per_spin = (
+            spins_staked / total_spins if total_spins else Decimal('0')
+        )
+
+        # ── 4. GGR ────────────────────────────────────────────────────
+        total_won_amount = spins_qs.filter(
             outcome='win'
         ).aggregate(t=Sum('payout_amount'))['t'] or Decimal('0')
-        house_fees = total_staked - total_won
-
-        spin_count_total = spins_qs.count()
-        spin_count_wins = spins_qs.filter(outcome='win').count()
-        spin_count_losses = spins_qs.filter(outcome='loss').count()
-
-        # ── Cash Flow (monthly) ────────────────────────────────────────
-        deposits_monthly = monthly_aggregation(
-            Transaction.objects.filter(type='deposit', status='completed'),
-            value_field='amount',
-            months=12,
+        ggr_amount = spins_staked - total_won_amount
+        ggr_margin = (
+            round(float(ggr_amount / spins_staked) * 100, 2)
+            if spins_staked > 0 else 0
         )
-        withdrawals_monthly = monthly_aggregation(
-            Withdrawal.objects.filter(status='completed'),
-            date_field='completed_at',
-            value_field='net_amount',
-            months=12,
+
+        prev_spins_qs = _prev_qs(Spin.objects.all())
+        prev_staked = prev_spins_qs.aggregate(
+            t=Sum('stake_amount')
+        )['t'] or Decimal('0')
+        prev_won = prev_spins_qs.filter(
+            outcome='win'
+        ).aggregate(t=Sum('payout_amount'))['t'] or Decimal('0')
+        prev_ggr = prev_staked - prev_won
+
+        # ── 5. CASH FLOW (filtered chart) ─────────────────────────────
+        if use_daily:
+            trunc_fn = TruncDay
+            date_fmt = '%-d %b'
+            label_key = 'date'
+        else:
+            trunc_fn = TruncMonth
+            date_fmt = '%b'
+            label_key = 'month'
+
+        dep_chart_qs = (
+            _filter_qs(
+                Transaction.objects.filter(type='deposit', status='completed')
+            )
+            .annotate(period=trunc_fn('created_at'))
+            .values('period')
+            .annotate(count=Count('id'), total=Sum('amount'))
+            .order_by('period')
         )
+
+        wd_chart_qs = (
+            _filter_qs(
+                Withdrawal.objects.filter(status='completed'),
+                date_field='completed_at',
+            )
+            .annotate(period=trunc_fn('completed_at'))
+            .values('period')
+            .annotate(count=Count('id'), total=Sum('net_amount'))
+            .order_by('period')
+        )
+
+        cash_flow_deposits = [
+            {
+                label_key: row['period'].strftime(date_fmt) if row['period'] else '',
+                'count': row['count'],
+                'amount': str(row['total'] or 0),
+            }
+            for row in dep_chart_qs
+        ]
+        cash_flow_withdrawals = [
+            {
+                label_key: row['period'].strftime(date_fmt) if row['period'] else '',
+                'count': row['count'],
+                'amount': str(row['total'] or 0),
+            }
+            for row in wd_chart_qs
+        ]
+
+        # ── 6. SPIN BREAKDOWN ─────────────────────────────────────────
+        spin_breakdown = {
+            'total_ggr': str(ggr_amount),
+            'total_won_by_players': str(total_won_amount),
+            'total_staked': str(spins_staked),
+        }
+
+        # ── 7. GGR TREND (filtered) ───────────────────────────────────
+        ggr_trend_qs = (
+            spins_qs
+            .annotate(period=trunc_fn('created_at'))
+            .values('period')
+            .annotate(
+                staked=Sum('stake_amount'),
+                won=Sum('payout_amount'),
+            )
+            .order_by('period')
+        )
+        ggr_trend = [
+            {
+                label_key: row['period'].strftime(date_fmt) if row['period'] else '',
+                'ggr': str(
+                    (row['staked'] or Decimal('0')) - (row['won'] or Decimal('0'))
+                ),
+                'staked': str(row['staked'] or 0),
+                'won': str(row['won'] or 0),
+            }
+            for row in ggr_trend_qs
+        ]
 
         return Response({
             'success': True,
             'data': {
-                'kpis': {
-                    'total_deposits': str(total_deposits),
-                    'total_deposits_change_pct': pct_change(dep_this, dep_last),
-                    'total_withdrawals': str(total_withdrawals),
-                    'total_withdrawals_change_pct': pct_change(wd_this, wd_last),
-                    'pending_withdrawals': str(pending_withdrawals),
+                'period': period,
+                'month': month_param or None,
+
+                # Section 1 — Deposits
+                'deposits': {
+                    'total_amount': str(total_deposit_amount),
+                    'total_amount_change_pct': pct_change(total_deposit_amount, prev_dep_amount),
+                    'total_transactions': total_deposit_count,
+                    'average_per_deposit': str(round(avg_deposit, 2)),
+                    'net_position': str(net_position),
                 },
-                'spins_breakdown': {
-                    'total_staked': str(total_staked),
-                    'total_won': str(total_won),
-                    'house_fees': str(house_fees),
-                    'spin_count_total': spin_count_total,
-                    'spin_count_wins': spin_count_wins,
-                    'spin_count_losses': spin_count_losses,
+
+                # Section 2 — Withdrawals
+                'withdrawals': {
+                    'total_amount': str(total_wd_amount),
+                    'total_amount_change_pct': pct_change(total_wd_amount, prev_wd_amount),
+                    'pct_of_deposits': str(pct_of_deposits),
+                    'pending_amount': str(pending_wd_amount),
+                    'pending_queue_count': pending_wd_count,
+                    'success_rate_pct': str(success_rate),
                 },
+
+                # Section 3 — Spins
+                'spins': {
+                    'total_spins': total_spins,
+                    'win_rate_pct': str(win_rate),
+                    'wins_count': wins_count,
+                    'losses_count': losses_count,
+                    'average_stake_per_spin': str(round(avg_stake_per_spin, 2)),
+                },
+
+                # Section 4 — GGR
+                'ggr': {
+                    'ggr_amount': str(ggr_amount),
+                    'ggr_change_pct': pct_change(ggr_amount, prev_ggr),
+                    'ggr_margin_pct': str(ggr_margin),
+                    'total_staked': str(spins_staked),
+                    'total_won': str(total_won_amount),
+                    'average_stake_per_spin': str(round(avg_stake_per_spin, 2)),
+                },
+
+                # Section 5 — Cash Flow chart
                 'cash_flow': {
-                    'deposits': deposits_monthly,
-                    'withdrawals': withdrawals_monthly,
+                    'deposits': cash_flow_deposits,
+                    'withdrawals': cash_flow_withdrawals,
                 },
+
+                # Section 6 — Spin Breakdown
+                'spin_breakdown': spin_breakdown,
+
+                # Section 7 — GGR Trend chart
+                'ggr_trend': ggr_trend,
             },
         })
 
