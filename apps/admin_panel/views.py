@@ -57,15 +57,16 @@ class DashboardView(APIView):
     GET /api/v1/admin/dashboard/
 
     Query params:
-      period    7d | 30d | 90d | 365d | all (default: 30d)
-      month     YYYY-MM  (e.g. 2026-05) — show daily breakdown for that month
+      year      4-digit year e.g. 2026 (default: current year)
+      month     2-digit month e.g. 05 (only valid with year)
 
-    Returns:
-      kpis              Total Revenue (staking), Net Profit (GGR), Realized
-                        House Edge, Player Win Rate, Active Users
-      graph             Monthly data (if period) or daily data (if month)
-      recent_spins      Last 10 spins
-      top_winners       Top 10 users by total winnings
+    Behavior:
+      ?year=2026          → monthly data for all 12 months of 2026
+      ?year=2026&month=05 → daily data for every day in May 2026
+      (no params)         → monthly data for current year
+
+    Percentage change compares selected year vs previous year
+    (or selected month vs same month last year).
     """
     permission_classes = [IsAdminUser]
 
@@ -77,47 +78,63 @@ class DashboardView(APIView):
 
         now = timezone.now()
 
-        # ── Parse period / month param ────────────────────────────────
-        period = request.query_params.get('period', '30d').strip()
-        month_param = request.query_params.get('month', '').strip()
 
-        PERIOD_MAP = {
-            '7d': 7, '30d': 30, '90d': 90, '365d': 365, 'all': None,
+        # ── Parse year + month params ─────────────────────────────────
+        # ?year=2026              → all 12 months in 2026
+        # ?year=2026&month=May    → every day of May 2026 (all days returned)
+        # (no params)             → current year all months (default)
+        import calendar as _cal
+        from datetime import datetime as _dt
+
+        MONTH_NAMES = {
+            'january': 1, 'february': 2, 'march': 3, 'april': 4,
+            'may': 5, 'june': 6, 'july': 7, 'august': 8,
+            'september': 9, 'october': 10, 'november': 11, 'december': 12,
+        }
+        MONTH_ABBR = {
+            'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
+            'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12,
         }
 
+        year_param  = request.query_params.get('year',  '').strip()
+        month_param = request.query_params.get('month', '').strip()
+
+        _now = timezone.now()
+        _year = int(year_param) if year_param and year_param.isdigit() else _now.year
+
+        # Resolve month — accept name ("May"), abbreviation ("May"), or number ("05")
+        # Default: current month (daily view)
+        _month = None
         if month_param:
-            # Daily breakdown for a specific month e.g. 2026-05
-            try:
-                from datetime import datetime
-                month_dt = datetime.strptime(month_param, '%Y-%m')
-                period_start = timezone.make_aware(month_dt.replace(day=1))
-                # Last day of month
-                import calendar
-                last_day = calendar.monthrange(month_dt.year, month_dt.month)[1]
-                period_end = timezone.make_aware(
-                    month_dt.replace(day=last_day, hour=23, minute=59, second=59)
-                )
-            except ValueError:
-                return Response(
-                    {'error': True, 'code': 'INVALID_MONTH',
-                     'message': 'month must be in YYYY-MM format.'},
-                    status=400,
-                )
+            mp_lower = month_param.lower()
+            if month_param.isdigit() and 1 <= int(month_param) <= 12:
+                _month = int(month_param)
+            elif mp_lower in MONTH_NAMES:
+                _month = MONTH_NAMES[mp_lower]
+            elif mp_lower in MONTH_ABBR:
+                _month = MONTH_ABBR[mp_lower]
+        elif not year_param:
+            # No params at all → default to current month daily view
+            _month = _now.month
+            _year  = _now.year
+
+        if _month:
+            _last_day = _cal.monthrange(_year, _month)[1]
+            period_start = timezone.make_aware(_dt(_year, _month, 1, 0, 0, 0))
+            period_end   = timezone.make_aware(_dt(_year, _month, _last_day, 23, 59, 59))
             use_daily = True
         else:
-            days = PERIOD_MAP.get(period, 30)
-            period_start = (now - timedelta(days=days)) if days else None
-            period_end = now
+            # year only → all 12 months
+            period_start = timezone.make_aware(_dt(_year, 1, 1, 0, 0, 0))
+            period_end   = timezone.make_aware(_dt(_year, 12, 31, 23, 59, 59))
             use_daily = False
 
         # ── Build filtered querysets ───────────────────────────────────
         def _filter(qs, date_field='created_at'):
-            if period_start:
-                qs = qs.filter(**{f'{date_field}__gte': period_start})
-            if period_end and month_param:
-                qs = qs.filter(**{f'{date_field}__lte': period_end})
-            return qs
-
+            return qs.filter(**{
+                f'{date_field}__gte': period_start,
+                f'{date_field}__lte': period_end,
+            })
         # ── KPIs ──────────────────────────────────────────────────────
         # Total Revenue = total amount staked in the period
         spins_qs = _filter(Spin.objects.all())
@@ -153,33 +170,37 @@ class DashboardView(APIView):
         new_today = User.objects.filter(created_at__gte=today_start).count()
 
         # ── Percentage change vs previous period ──────────────────────
-        if period_start and not month_param:
-            period_length = (now - period_start).total_seconds()
-            prev_start = period_start - timedelta(seconds=period_length)
-            prev_end = period_start
-
-            prev_staked = Spin.objects.filter(
-                created_at__gte=prev_start,
-                created_at__lt=prev_end,
-            ).aggregate(t=Sum('stake_amount'))['t'] or Decimal('0')
-
-            prev_won = Spin.objects.filter(
-                created_at__gte=prev_start,
-                created_at__lt=prev_end,
-                outcome='win',
-            ).aggregate(t=Sum('payout_amount'))['t'] or Decimal('0')
-            prev_ggr = prev_staked - prev_won
-
-            revenue_change = pct_change(total_staked, prev_staked)
-            ggr_change = pct_change(ggr, prev_ggr)
+        # Previous period = previous year (or previous month if daily view)
+        if use_daily:
+            # Compare to same month last year
+            prev_year = _year - 1
+            prev_month = int(month_param) if month_param else 1
+            prev_last = _cal.monthrange(prev_year, prev_month)[1]
+            prev_start = timezone.make_aware(_dt(prev_year, prev_month, 1, 0, 0, 0))
+            prev_end   = timezone.make_aware(_dt(prev_year, prev_month, prev_last, 23, 59, 59))
         else:
-            revenue_change = '0'
-            ggr_change = '0'
+            # Compare to same year minus 1
+            prev_start = timezone.make_aware(_dt(_year - 1, 1, 1, 0, 0, 0))
+            prev_end   = timezone.make_aware(_dt(_year - 1, 12, 31, 23, 59, 59))
+
+        prev_spins = Spin.objects.filter(
+            created_at__gte=prev_start, created_at__lte=prev_end,
+        )
+        prev_staked = prev_spins.aggregate(t=Sum('stake_amount'))['t'] or Decimal('0')
+        prev_won_amt = prev_spins.filter(outcome='win').aggregate(
+            t=Sum('payout_amount')
+        )['t'] or Decimal('0')
+        prev_ggr = prev_staked - prev_won_amt
+        revenue_change = pct_change(total_staked, prev_staked)
+        ggr_change = pct_change(ggr, prev_ggr)
 
         # ── Graph data ─────────────────────────────────────────────────
+        MONTH_NAMES_LIST = [
+            '', 'January', 'February', 'March', 'April', 'May', 'June',
+            'July', 'August', 'September', 'October', 'November', 'December',
+        ]
         if use_daily:
-            # Daily breakdown for the selected month
-            graph_data = []
+            # Daily breakdown — every day of the month included (zeros for no activity)
             daily_qs = (
                 spins_qs
                 .annotate(day=TruncDay('created_at'))
@@ -189,24 +210,36 @@ class DashboardView(APIView):
                     won=Sum('payout_amount'),
                     spin_count=Count('id'),
                 )
-                .order_by('day')
             )
+            # Build lookup: day_of_month → data
+            daily_lookup = {}
             for row in daily_qs:
-                day_staked = row['staked'] or Decimal('0')
-                day_won = row['won'] or Decimal('0')
+                if row['day']:
+                    d_staked = row['staked'] or Decimal('0')
+                    d_won = row['won'] or Decimal('0')
+                    daily_lookup[row['day'].day] = {
+                        'staked': d_staked,
+                        'won': d_won,
+                        'spins': row['spin_count'],
+                    }
+
+            # Generate entry for EVERY day in the month
+            month_name = MONTH_NAMES_LIST[_month] if _month else ''
+            last_day_of_month = _cal.monthrange(_year, _month)[1]
+            graph_data = []
+            for day_num in range(1, last_day_of_month + 1):
+                row = daily_lookup.get(day_num, {'staked': Decimal('0'), 'won': Decimal('0'), 'spins': 0})
                 graph_data.append({
-                    'date': row['day'].strftime('%-d %b') if row['day'] else '',
-                    'staked': str(day_staked),
-                    'won': str(day_won),
-                    'ggr': str(day_staked - day_won),
-                    'spins': row['spin_count'],
+                    'day': day_num,
+                    'month': month_name,
+                    'year': _year,
+                    'staked': str(row['staked']),
+                    'won': str(row['won']),
+                    'ggr': str(row['staked'] - row['won']),
+                    'spins': row['spins'],
                 })
         else:
-            # Monthly aggregation
-            months = 12 if period in ('365d', 'all') else (
-                3 if period == '90d' else 1
-            )
-            graph_data = []
+            # Monthly aggregation — every month of the year included (zeros for no activity)
             monthly_qs = (
                 spins_qs
                 .annotate(month=TruncMonth('created_at'))
@@ -216,18 +249,32 @@ class DashboardView(APIView):
                     won=Sum('payout_amount'),
                     spin_count=Count('id'),
                 )
-                .order_by('month')
             )
+            # Build lookup: month_number → data
+            monthly_lookup = {}
             for row in monthly_qs:
-                m_staked = row['staked'] or Decimal('0')
-                m_won = row['won'] or Decimal('0')
+                if row['month']:
+                    m_staked = row['staked'] or Decimal('0')
+                    m_won = row['won'] or Decimal('0')
+                    monthly_lookup[row['month'].month] = {
+                        'staked': m_staked,
+                        'won': m_won,
+                        'spins': row['spin_count'],
+                    }
+
+            # Generate entry for EVERY month (1-12)
+            graph_data = []
+            for m_num in range(1, 13):
+                row = monthly_lookup.get(m_num, {'staked': Decimal('0'), 'won': Decimal('0'), 'spins': 0})
                 graph_data.append({
-                    'month': row['month'].strftime('%b') if row['month'] else '',
-                    'year': row['month'].year if row['month'] else '',
-                    'staked': str(m_staked),
-                    'won': str(m_won),
-                    'ggr': str(m_staked - m_won),
-                    'spins': row['spin_count'],
+                    'month': MONTH_NAMES_LIST[m_num][:3],  # "Jan", "Feb" etc.
+                    'month_full': MONTH_NAMES_LIST[m_num],
+                    'month_num': m_num,
+                    'year': _year,
+                    'staked': str(row['staked']),
+                    'won': str(row['won']),
+                    'ggr': str(row['staked'] - row['won']),
+                    'spins': row['spins'],
                 })
 
         # ── Recent Spins (last 10) ────────────────────────────────────
@@ -273,8 +320,9 @@ class DashboardView(APIView):
         return Response({
             'success': True,
             'data': {
-                'period': period,
-                'month': month_param or None,
+                'period': 'month' if use_daily else 'year',
+                'year': _year,
+                'month': MONTH_NAMES_LIST[_month] if _month else None,
                 'kpis': {
                     'total_revenue': str(total_staked),
                     'total_revenue_change_pct': revenue_change,
@@ -303,10 +351,15 @@ class FinancialsView(APIView):
     GET /api/v1/admin/financials/
 
     Query params:
-      period    7d | 30d | 90d | 365d | all (default: 30d)
-      month     YYYY-MM — show daily breakdown for cash flow / GGR trend
+      year      4-digit year e.g. 2026 (default: current year)
+      month     2-digit month e.g. 05 (only valid with year)
 
-    Returns all 7 financial sections per spec.
+    Behavior:
+      ?year=2026          → monthly breakdown for all of 2026
+      ?year=2026&month=05 → daily breakdown for May 2026
+      (no params)         → monthly breakdown for current year
+
+    Returns all 7 financial sections.
     """
     permission_classes = [IsAdminUser]
 
@@ -318,57 +371,80 @@ class FinancialsView(APIView):
 
         now = timezone.now()
 
-        # ── Parse period / month param ─────────────────────────────────
-        period = request.query_params.get('period', '30d').strip()
+
+        # ── Parse year + month params ─────────────────────────────────
+        # ?year=2026              → all 12 months in 2026
+        # ?year=2026&month=May    → every day of May 2026 (all days returned)
+        # (no params)             → current year all months (default)
+        import calendar as _cal
+        from datetime import datetime as _dt
+
+        MONTH_NAMES = {
+            'january': 1, 'february': 2, 'march': 3, 'april': 4,
+            'may': 5, 'june': 6, 'july': 7, 'august': 8,
+            'september': 9, 'october': 10, 'november': 11, 'december': 12,
+        }
+        MONTH_ABBR = {
+            'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
+            'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12,
+        }
+
+        year_param  = request.query_params.get('year',  '').strip()
         month_param = request.query_params.get('month', '').strip()
 
-        PERIOD_MAP = {'7d': 7, '30d': 30, '90d': 90, '365d': 365, 'all': None}
+        _now = timezone.now()
+        _year = int(year_param) if year_param and year_param.isdigit() else _now.year
 
+        # Resolve month — accept name ("May"), abbreviation ("May"), or number ("05")
+        # Default: current month (daily view)
+        _month = None
         if month_param:
-            try:
-                from datetime import datetime
-                import calendar
-                month_dt = datetime.strptime(month_param, '%Y-%m')
-                period_start = timezone.make_aware(month_dt.replace(day=1))
-                last_day = calendar.monthrange(month_dt.year, month_dt.month)[1]
-                period_end = timezone.make_aware(
-                    month_dt.replace(day=last_day, hour=23, minute=59, second=59)
-                )
-            except ValueError:
-                return Response(
-                    {'error': True, 'code': 'INVALID_MONTH',
-                     'message': 'month must be YYYY-MM format.'},
-                    status=400,
-                )
+            mp_lower = month_param.lower()
+            if month_param.isdigit() and 1 <= int(month_param) <= 12:
+                _month = int(month_param)
+            elif mp_lower in MONTH_NAMES:
+                _month = MONTH_NAMES[mp_lower]
+            elif mp_lower in MONTH_ABBR:
+                _month = MONTH_ABBR[mp_lower]
+        elif not year_param:
+            # No params at all → default to current month daily view
+            _month = _now.month
+            _year  = _now.year
+
+        if _month:
+            _last_day = _cal.monthrange(_year, _month)[1]
+            period_start = timezone.make_aware(_dt(_year, _month, 1, 0, 0, 0))
+            period_end   = timezone.make_aware(_dt(_year, _month, _last_day, 23, 59, 59))
             use_daily = True
         else:
-            days = PERIOD_MAP.get(period, 30)
-            period_start = (now - timedelta(days=days)) if days else None
-            period_end = now
+            # year only → all 12 months
+            period_start = timezone.make_aware(_dt(_year, 1, 1, 0, 0, 0))
+            period_end   = timezone.make_aware(_dt(_year, 12, 31, 23, 59, 59))
             use_daily = False
 
-        def _filter_qs(qs, date_field='created_at'):
-            if period_start:
-                qs = qs.filter(**{f'{date_field}__gte': period_start})
-            if month_param and period_end:
-                qs = qs.filter(**{f'{date_field}__lte': period_end})
-            return qs
-
+        # ── Build filtered querysets ───────────────────────────────────
+        def _filter(qs, date_field='created_at'):
+            return qs.filter(**{
+                f'{date_field}__gte': period_start,
+                f'{date_field}__lte': period_end,
+            })
         # Previous period for % change
-        if period_start and not month_param:
-            period_seconds = (now - period_start).total_seconds()
-            prev_start = period_start - timedelta(seconds=period_seconds)
-            prev_end = period_start
+        # Previous period = previous year or previous month
+        if use_daily:
+            prev_yr = _year - 1
+            prev_mo = int(month_param) if month_param else 1
+            prev_last = _cal.monthrange(prev_yr, prev_mo)[1]
+            prev_start = timezone.make_aware(_dt(prev_yr, prev_mo, 1, 0, 0, 0))
+            prev_end   = timezone.make_aware(_dt(prev_yr, prev_mo, prev_last, 23, 59, 59))
         else:
-            prev_start = prev_end = None
+            prev_start = timezone.make_aware(_dt(_year - 1, 1, 1, 0, 0, 0))
+            prev_end   = timezone.make_aware(_dt(_year - 1, 12, 31, 23, 59, 59))
 
         def _prev_qs(qs, date_field='created_at'):
-            if prev_start and prev_end:
-                return qs.filter(**{
-                    f'{date_field}__gte': prev_start,
-                    f'{date_field}__lt': prev_end,
-                })
-            return qs.none()
+            return qs.filter(**{
+                f'{date_field}__gte': prev_start,
+                f'{date_field}__lte': prev_end,
+            })
 
         # ── 1. DEPOSITS ────────────────────────────────────────────────
         dep_qs = _filter_qs(
@@ -466,6 +542,11 @@ class FinancialsView(APIView):
             date_fmt = '%b'
             label_key = 'month'
 
+        _fin_month_names = [
+            '', 'January', 'February', 'March', 'April', 'May', 'June',
+            'July', 'August', 'September', 'October', 'November', 'December',
+        ]
+
         dep_chart_qs = (
             _filter_qs(
                 Transaction.objects.filter(type='deposit', status='completed')
@@ -473,8 +554,11 @@ class FinancialsView(APIView):
             .annotate(period=trunc_fn('created_at'))
             .values('period')
             .annotate(count=Count('id'), total=Sum('amount'))
-            .order_by('period')
         )
+        dep_lookup = {
+            row['period'].day if use_daily else row['period'].month: row
+            for row in dep_chart_qs if row['period']
+        }
 
         wd_chart_qs = (
             _filter_qs(
@@ -484,25 +568,39 @@ class FinancialsView(APIView):
             .annotate(period=trunc_fn('completed_at'))
             .values('period')
             .annotate(count=Count('id'), total=Sum('net_amount'))
-            .order_by('period')
         )
+        wd_lookup = {
+            row['period'].day if use_daily else row['period'].month: row
+            for row in wd_chart_qs if row['period']
+        }
 
-        cash_flow_deposits = [
-            {
-                label_key: row['period'].strftime(date_fmt) if row['period'] else '',
-                'count': row['count'],
-                'amount': str(row['total'] or 0),
-            }
-            for row in dep_chart_qs
-        ]
-        cash_flow_withdrawals = [
-            {
-                label_key: row['period'].strftime(date_fmt) if row['period'] else '',
-                'count': row['count'],
-                'amount': str(row['total'] or 0),
-            }
-            for row in wd_chart_qs
-        ]
+        if use_daily:
+            _fin_last = _cal.monthrange(_year, _month)[1]
+            _fin_range = range(1, _fin_last + 1)
+            _fin_mname = _fin_month_names[_month] if _month else ''
+        else:
+            _fin_range = range(1, 13)
+
+        cash_flow_deposits = []
+        cash_flow_withdrawals = []
+        for key in _fin_range:
+            dep_row = dep_lookup.get(key, {})
+            wd_row  = wd_lookup.get(key, {})
+            if use_daily:
+                label = {'day': key, 'month': _fin_mname, 'year': _year}
+            else:
+                label = {'month': _fin_month_names[key][:3], 'month_num': key, 'year': _year}
+
+            cash_flow_deposits.append({
+                **label,
+                'count': dep_row.get('count', 0),
+                'amount': str(dep_row.get('total') or 0),
+            })
+            cash_flow_withdrawals.append({
+                **label,
+                'count': wd_row.get('count', 0),
+                'amount': str(wd_row.get('total') or 0),
+            })
 
         # ── 6. SPIN BREAKDOWN ─────────────────────────────────────────
         spin_breakdown = {
@@ -516,29 +614,35 @@ class FinancialsView(APIView):
             spins_qs
             .annotate(period=trunc_fn('created_at'))
             .values('period')
-            .annotate(
-                staked=Sum('stake_amount'),
-                won=Sum('payout_amount'),
-            )
-            .order_by('period')
+            .annotate(staked=Sum('stake_amount'), won=Sum('payout_amount'))
         )
-        ggr_trend = [
-            {
-                label_key: row['period'].strftime(date_fmt) if row['period'] else '',
-                'ggr': str(
-                    (row['staked'] or Decimal('0')) - (row['won'] or Decimal('0'))
-                ),
-                'staked': str(row['staked'] or 0),
-                'won': str(row['won'] or 0),
-            }
-            for row in ggr_trend_qs
-        ]
+        ggr_lookup = {
+            row['period'].day if use_daily else row['period'].month: row
+            for row in ggr_trend_qs if row['period']
+        }
+
+        ggr_trend = []
+        for key in _fin_range:
+            row = ggr_lookup.get(key, {})
+            g_staked = row.get('staked') or Decimal('0')
+            g_won    = row.get('won') or Decimal('0')
+            if use_daily:
+                label = {'day': key, 'month': _fin_mname, 'year': _year}
+            else:
+                label = {'month': _fin_month_names[key][:3], 'month_num': key, 'year': _year}
+            ggr_trend.append({
+                **label,
+                'ggr': str(g_staked - g_won),
+                'staked': str(g_staked),
+                'won': str(g_won),
+            })
 
         return Response({
             'success': True,
             'data': {
-                'period': period,
-                'month': month_param or None,
+                'period': 'month' if use_daily else 'year',
+                'year': _year,
+                'month': MONTH_NAMES_LIST[_month] if _month else None,
 
                 # Section 1 — Deposits
                 'deposits': {
