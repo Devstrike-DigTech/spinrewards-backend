@@ -179,7 +179,7 @@ class DashboardView(APIView):
         if use_daily:
             # Compare to same month last year
             prev_year = _year - 1
-            prev_month = int(month_param) if month_param else 1
+            prev_month = _month if _month else 1
             prev_last = _cal.monthrange(prev_year, prev_month)[1]
             prev_start = timezone.make_aware(_dt(prev_year, prev_month, 1, 0, 0, 0))
             prev_end   = timezone.make_aware(_dt(prev_year, prev_month, prev_last, 23, 59, 59))
@@ -438,7 +438,7 @@ class FinancialsView(APIView):
         # Previous period = previous year or previous month
         if use_daily:
             prev_yr = _year - 1
-            prev_mo = int(month_param) if month_param else 1
+            prev_mo = _month if _month else 1
             prev_last = _cal.monthrange(prev_yr, prev_mo)[1]
             prev_start = timezone.make_aware(_dt(prev_yr, prev_mo, 1, 0, 0, 0))
             prev_end   = timezone.make_aware(_dt(prev_yr, prev_mo, prev_last, 23, 59, 59))
