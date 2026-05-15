@@ -76,6 +76,11 @@ class DashboardView(APIView):
         from apps.withdrawals.models import Withdrawal
         from django.db.models.functions import TruncDay, TruncMonth
 
+        MONTH_NAMES_LIST = [
+            '', 'January', 'February', 'March', 'April', 'May', 'June',
+            'July', 'August', 'September', 'October', 'November', 'December',
+        ]
+
         now = timezone.now()
 
 
@@ -195,10 +200,6 @@ class DashboardView(APIView):
         ggr_change = pct_change(ggr, prev_ggr)
 
         # ── Graph data ─────────────────────────────────────────────────
-        MONTH_NAMES_LIST = [
-            '', 'January', 'February', 'March', 'April', 'May', 'June',
-            'July', 'August', 'September', 'October', 'November', 'December',
-        ]
         if use_daily:
             # Daily breakdown — every day of the month included (zeros for no activity)
             daily_qs = (
@@ -322,7 +323,7 @@ class DashboardView(APIView):
             'data': {
                 'period': 'month' if use_daily else 'year',
                 'year': _year,
-                'month': MONTH_NAMES_LIST[_month] if _month else None,
+                'month': MONTH_NAMES_LIST[_month] if _month and 1 <= _month <= 12 else None,
                 'kpis': {
                     'total_revenue': str(total_staked),
                     'total_revenue_change_pct': revenue_change,
@@ -368,6 +369,11 @@ class FinancialsView(APIView):
         from apps.wallet.models import Transaction
         from apps.withdrawals.models import Withdrawal
         from django.db.models.functions import TruncDay, TruncMonth
+
+        MONTH_NAMES_LIST = [
+            '', 'January', 'February', 'March', 'April', 'May', 'June',
+            'July', 'August', 'September', 'October', 'November', 'December',
+        ]
 
         now = timezone.now()
 
@@ -447,7 +453,7 @@ class FinancialsView(APIView):
             })
 
         # ── 1. DEPOSITS ────────────────────────────────────────────────
-        dep_qs = _filter_qs(
+        dep_qs = _filter(
             Transaction.objects.filter(type='deposit', status='completed')
         )
         total_deposit_amount = dep_qs.aggregate(t=Sum('amount'))['t'] or Decimal('0')
@@ -471,7 +477,7 @@ class FinancialsView(APIView):
         net_position = total_deposited_ever - total_withdrawn_ever
 
         # ── 2. WITHDRAWALS ─────────────────────────────────────────────
-        wd_qs = _filter_qs(
+        wd_qs = _filter(
             Withdrawal.objects.filter(status='completed'), date_field='completed_at'
         )
         total_wd_amount = wd_qs.aggregate(t=Sum('net_amount'))['t'] or Decimal('0')
@@ -494,7 +500,7 @@ class FinancialsView(APIView):
         ).count()
 
         # Rate of successful withdrawals
-        all_wd = _filter_qs(Withdrawal.objects.all(), date_field='requested_at')
+        all_wd = _filter(Withdrawal.objects.all(), date_field='requested_at')
         all_wd_count = all_wd.count()
         success_rate = (
             round((total_wd_count / all_wd_count) * 100, 1)
@@ -502,7 +508,7 @@ class FinancialsView(APIView):
         )
 
         # ── 3. SPINS ──────────────────────────────────────────────────
-        spins_qs = _filter_qs(Spin.objects.all())
+        spins_qs = _filter(Spin.objects.all())
         total_spins = spins_qs.count()
         wins_count = spins_qs.filter(outcome='win').count()
         losses_count = spins_qs.filter(outcome='loss').count()
@@ -542,13 +548,8 @@ class FinancialsView(APIView):
             date_fmt = '%b'
             label_key = 'month'
 
-        _fin_month_names = [
-            '', 'January', 'February', 'March', 'April', 'May', 'June',
-            'July', 'August', 'September', 'October', 'November', 'December',
-        ]
-
         dep_chart_qs = (
-            _filter_qs(
+            _filter(
                 Transaction.objects.filter(type='deposit', status='completed')
             )
             .annotate(period=trunc_fn('created_at'))
@@ -561,7 +562,7 @@ class FinancialsView(APIView):
         }
 
         wd_chart_qs = (
-            _filter_qs(
+            _filter(
                 Withdrawal.objects.filter(status='completed'),
                 date_field='completed_at',
             )
@@ -577,7 +578,7 @@ class FinancialsView(APIView):
         if use_daily:
             _fin_last = _cal.monthrange(_year, _month)[1]
             _fin_range = range(1, _fin_last + 1)
-            _fin_mname = _fin_month_names[_month] if _month else ''
+            _fin_mname = MONTH_NAMES_LIST[_month] if _month else ''
         else:
             _fin_range = range(1, 13)
 
@@ -589,7 +590,7 @@ class FinancialsView(APIView):
             if use_daily:
                 label = {'day': key, 'month': _fin_mname, 'year': _year}
             else:
-                label = {'month': _fin_month_names[key][:3], 'month_num': key, 'year': _year}
+                label = {'month': MONTH_NAMES_LIST[key][:3], 'month_num': key, 'year': _year}
 
             cash_flow_deposits.append({
                 **label,
@@ -629,7 +630,7 @@ class FinancialsView(APIView):
             if use_daily:
                 label = {'day': key, 'month': _fin_mname, 'year': _year}
             else:
-                label = {'month': _fin_month_names[key][:3], 'month_num': key, 'year': _year}
+                label = {'month': MONTH_NAMES_LIST[key][:3], 'month_num': key, 'year': _year}
             ggr_trend.append({
                 **label,
                 'ggr': str(g_staked - g_won),
@@ -642,7 +643,7 @@ class FinancialsView(APIView):
             'data': {
                 'period': 'month' if use_daily else 'year',
                 'year': _year,
-                'month': MONTH_NAMES_LIST[_month] if _month else None,
+                'month': MONTH_NAMES_LIST[_month] if _month and 1 <= _month <= 12 else None,
 
                 # Section 1 — Deposits
                 'deposits': {
