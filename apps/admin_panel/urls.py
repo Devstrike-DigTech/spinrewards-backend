@@ -27,6 +27,15 @@ from .views import (
     RTPControlListCreateView,
 )
 
+from .challenge_views import (
+    AdminChallengeCompletionsView,
+    AdminChallengeDetailView,
+    AdminChallengeListCreateView,
+    AdminChallengeParticipantsView,
+)
+from .referral_views import AdminReferralsView
+ 
+
 urlpatterns = [
      #Auth — email + password login (no token required)
     path('auth/login/', AdminLoginView.as_view(), name='admin-login'),
@@ -64,4 +73,12 @@ urlpatterns = [
 
     # Screen 8 — Audit Logs
     path('audit-logs/', AdminAuditLogsView.as_view(), name='admin-audit-logs'),
+    # Screen 9 — Challenges
+    path('challenges/', AdminChallengeListCreateView.as_view(), name='admin-challenges-list-create'),
+    path('challenges/<uuid:challenge_id>/', AdminChallengeDetailView.as_view(), name='admin-challenges-detail'),
+    path('challenges/<uuid:challenge_id>/participants/', AdminChallengeParticipantsView.as_view(), name='admin-challenges-participants'),
+    path('challenges/<uuid:challenge_id>/completions/', AdminChallengeCompletionsView.as_view(), name='admin-challenges-completions'),
+
+    # Screen 10 — Referrals
+    path('referrals/', AdminReferralsView.as_view(), name='admin-referrals-list'),
 ]

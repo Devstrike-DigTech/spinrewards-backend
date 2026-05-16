@@ -37,7 +37,7 @@ LOCAL_APPS = [
     'apps.withdrawals',
     'apps.kyc',
     'apps.referrals',
-    'apps.rewards',
+    'apps.challenges',
     'apps.admin_panel',
 ]
 
