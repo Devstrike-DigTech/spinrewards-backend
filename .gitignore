@@ -53,3 +53,5 @@ smoke_test_wallet.py
 smoke_test_withdrawals.py
 smoke_test_kyc.py
 smoke_test_admin.py
+smoke_test_referrals.py
+smoke_test_challenges.py
