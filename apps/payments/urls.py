@@ -13,6 +13,7 @@ from .views import (
     DepositInitiateView,
     DepositListView,
     VirtualAccountView,
+    payment_callback_page,
 )
 
 urlpatterns = [
@@ -20,4 +21,5 @@ urlpatterns = [
     path('list/', DepositListView.as_view(), name='deposit-list'),
     path('virtual-account/', VirtualAccountView.as_view(), name='virtual-account'),
     path('<uuid:deposit_id>/', DepositDetailView.as_view(), name='deposit-detail'),
+    path('callback/', payment_callback_page, name='payment-callback'),
 ]
