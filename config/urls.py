@@ -3,8 +3,11 @@ from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
 
+from apps.payments.views import payment_callback_page
+
 urlpatterns = [
     path('django-admin/', admin.site.urls),
+    path('payment/callback/', payment_callback_page, name='payment-callback'),
 
     # API v1
     path('api/v1/', include([

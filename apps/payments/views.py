@@ -66,6 +66,8 @@ from .serializers import (
     VirtualAccountSerializer,
 )
 from .services import PaymentService
+from django.shortcuts import render
+from django.views.decorators.http import require_GET
 
 logger = logging.getLogger(__name__)
 
@@ -139,3 +141,19 @@ class VirtualAccountView(APIView):
         return Response(
             {'success': True, 'data': VirtualAccountSerializer(va).data},
         )
+
+@require_GET
+def payment_callback_page(request):
+    """
+    Public landing page that Paystack redirects to after payment.
+    
+    Doesn't validate anything — the webhook handles balance crediting.
+    This page just closes itself so the user returns to the Mini App.
+    """
+    status = request.GET.get('status', 'success')
+    reference = request.GET.get('reference', '')
+    
+    return render(request, 'payments/payment_complete.html', {
+        'status': status,
+        'reference': reference,
+    })

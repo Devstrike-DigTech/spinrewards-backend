@@ -54,7 +54,8 @@ class PaystackProvider(PaymentProvider):
                         'user_id': str(user.id),
                         'telegram_id': user.telegram_id,
                     },
-                    'callback_url': f'{settings.MINI_APP_URL}/deposit/callback',
+                    # 'callback_url': f'{settings.MINI_APP_URL}/deposit/callback',
+                    'callback_url': f'{settings.MINI_APP_URL}/payment/callback/',
                 },
                 headers={
                     'Authorization': f'Bearer {settings.PAYSTACK_SECRET_KEY}',
