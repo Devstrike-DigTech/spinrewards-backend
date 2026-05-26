@@ -46,12 +46,14 @@ htmlcov/
 # Celery
 celerybeat-schedule
 celerybeat.pid
-test_auth_backend.py
-smoke_test_spin.py
-smoke_test_payments.py
-smoke_test_wallet.py
-smoke_test_withdrawals.py
-smoke_test_kyc.py
-smoke_test_admin.py
-smoke_test_referrals.py
-smoke_test_challenges.py
+# test_auth_backend.py
+# smoke_test_spin.py
+# smoke_test_payments.py
+# smoke_test_wallet.py
+# smoke_test_withdrawals.py
+# smoke_test_kyc.py
+# smoke_test_admin.py
+# smoke_test_referrals.py
+# smoke_test_challenges.py
+# diagnose_rewards.py
+diagnose_*.py
