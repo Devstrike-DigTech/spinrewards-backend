@@ -1,13 +1,12 @@
 """
-Challenge signals.
+Challenge signals — FIXED.
 
-Hooks the ChallengeEngine into all relevant events:
-  - Post-spin        → spin_count, spin_streak, welcome, win_streak, total_staked
-  - Post-login       → daily_login, login_streak
-  - Post-deposit     → deposit, deposit_streak
-  - Post-referral    → referral (after referred user makes first deposit)
+The bug: receivers defined inside connect_xxx() functions get garbage-collected
+because Django uses weak references by default. Receivers must be at module
+scope OR use weak=False.
 
-Each signal is as lightweight as possible — heavy logic lives in the engine.
+This version uses top-level receivers — they stay alive as long as the module
+is loaded.
 """
 import logging
 
@@ -17,84 +16,96 @@ from django.dispatch import Signal, receiver
 logger = logging.getLogger(__name__)
 
 # Custom signals for events not covered by post_save
-user_logged_in_challenge   = Signal()   # args: user
-referral_qualified         = Signal()   # args: referrer, referred_user
+user_logged_in_challenge = Signal()   # args: user
+referral_qualified       = Signal()   # args: referrer, referred_user
 
 
-# ─── Spin signal ──────────────────────────────────────────────────────────────
+# ─── Lazy imports inside receivers (avoid circular imports) ───────────────────
 
-def connect_spin_signal():
-    """Connect to Spin post_save."""
+def _get_spin_model():
+    from apps.spin.models import Spin
+    return Spin
+
+
+def _get_transaction_model():
+    from apps.wallet.models import Transaction
+    return Transaction
+
+
+def _get_engine():
+    from apps.challenges.engine import ChallengeEngine
+    return ChallengeEngine
+
+
+# ─── Spin receiver (top-level so weak refs don't kill it) ─────────────────────
+
+@receiver(post_save, dispatch_uid='challenges_spin_handler')
+def on_any_save(sender, instance, created, **kwargs):
+    """
+    Listens to ALL post_save signals and filters by model name.
+
+    Why this approach: we can't use sender=Spin at decoration time because
+    that would require importing the model at module load, which causes
+    circular import issues. Instead we filter inside the handler.
+    """
+    if not created:
+        return
+
+    model_name = sender.__name__
+
+    if model_name == 'Spin':
+        _handle_spin(instance)
+    elif model_name == 'Transaction':
+        _handle_transaction(instance)
+
+
+def _handle_spin(spin):
     try:
-        from apps.spin.models import Spin
-
-        @receiver(post_save, sender=Spin, dispatch_uid='challenges_spin_handler')
-        def on_spin_completed(sender, instance, created, **kwargs):
-            if not created:
-                return
-            try:
-                from apps.challenges.engine import ChallengeEngine
-                ChallengeEngine.handle_event(
-                    user=instance.user,
-                    event='spin',
-                    metadata={
-                        'stake_amount': str(instance.stake_amount),
-                        'outcome': instance.outcome,
-                        'payout_amount': str(instance.payout_amount),
-                        'spin_id': str(instance.id),
-                        'is_welcome_spin': instance.is_welcome_spin,
-                    },
-                )
-            except Exception as e:
-                logger.exception('Challenge spin signal error: %s', e)
-
-    except ImportError:
-        logger.warning('challenges: spin model not available, skipping signal')
+        engine = _get_engine()
+        engine.handle_event(
+            user=spin.user,
+            event='spin',
+            metadata={
+                'stake_amount': str(spin.stake_amount),
+                'outcome': spin.outcome,
+                'payout_amount': str(spin.payout_amount),
+                'spin_id': str(spin.id),
+                'is_welcome_spin': getattr(spin, 'is_welcome_spin', False),
+            },
+        )
+    except Exception as e:
+        logger.exception('Challenge spin signal error: %s', e)
 
 
-# ─── Deposit signal ───────────────────────────────────────────────────────────
-
-def connect_deposit_signal():
-    """Connect to Transaction post_save for deposits."""
+def _handle_transaction(tx):
+    if tx.type != 'deposit' or tx.status != 'completed':
+        return
     try:
-        from apps.wallet.models import Transaction
-
-        @receiver(post_save, sender=Transaction, dispatch_uid='challenges_deposit_handler')
-        def on_transaction_completed(sender, instance, created, **kwargs):
-            if not created:
-                return
-            if instance.type != 'deposit' or instance.status != 'completed':
-                return
-            try:
-                from apps.challenges.engine import ChallengeEngine
-                ChallengeEngine.handle_event(
-                    user=instance.user,
-                    event='deposit',
-                    metadata={
-                        'amount': str(instance.amount),
-                        'transaction_id': str(instance.id),
-                    },
-                )
-            except Exception as e:
-                logger.exception('Challenge deposit signal error: %s', e)
-
-    except ImportError:
-        logger.warning('challenges: wallet model not available, skipping signal')
+        engine = _get_engine()
+        engine.handle_event(
+            user=tx.user,
+            event='deposit',
+            metadata={
+                'amount': str(tx.amount),
+                'transaction_id': str(tx.id),
+            },
+        )
+    except Exception as e:
+        logger.exception('Challenge deposit signal error: %s', e)
 
 
-# ─── Login signal ─────────────────────────────────────────────────────────────
+# ─── Login signal (top-level receiver) ────────────────────────────────────────
 
 @receiver(user_logged_in_challenge)
 def on_user_login(sender, user, **kwargs):
     """
-    Call this signal from your auth view after a successful login:
-
+    Trigger by calling:
         from apps.challenges.signals import user_logged_in_challenge
         user_logged_in_challenge.send(sender=None, user=request.user)
     """
     try:
-        from apps.challenges.engine import ChallengeEngine
-        ChallengeEngine.handle_event(
+        engine = _get_engine()
+        engine.handle_event(
             user=user,
             event='login',
             metadata={'user_id': str(user.id)},
@@ -103,20 +114,18 @@ def on_user_login(sender, user, **kwargs):
         logger.exception('Challenge login signal error: %s', e)
 
 
-# ─── Referral signal ──────────────────────────────────────────────────────────
+# ─── Referral signal (top-level receiver) ─────────────────────────────────────
 
 @receiver(referral_qualified)
 def on_referral_qualified(sender, referrer, referred_user, **kwargs):
     """
-    Call this signal from your referral service after the referred user
-    completes their first deposit:
-
+    Trigger by calling:
         from apps.challenges.signals import referral_qualified
-        referral_qualified.send(sender=None, referrer=referrer, referred_user=user)
+        referral_qualified.send(sender=None, referrer=referrer, referred_user=referred_user)
     """
     try:
-        from apps.challenges.engine import ChallengeEngine
-        ChallengeEngine.handle_event(
+        engine = _get_engine()
+        engine.handle_event(
             user=referrer,
             event='referral',
             metadata={
@@ -127,11 +136,4 @@ def on_referral_qualified(sender, referrer, referred_user, **kwargs):
         logger.exception('Challenge referral signal error: %s', e)
 
 
-def connect_all():
-    """Connect all signals. Called from ChallengesConfig.ready()."""
-    connect_spin_signal()
-    connect_deposit_signal()
-
-
-# Auto-connect on import (signals module is imported in apps.py ready())
-connect_all()
+logger.info('Challenge signals connected')
