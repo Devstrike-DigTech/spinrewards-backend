@@ -1,3 +1,17 @@
+# """
+# Challenge player URL routes.
+
+# Mount at /api/v1/challenges/ in config/urls.py.
+# Admin routes live in apps/admin_panel/urls.py.
+# """
+# from django.urls import path
+
+# from .views import ChallengeDetailView, ChallengeListView
+
+# urlpatterns = [
+#     path('', ChallengeListView.as_view(), name='challenge-list'),
+#     path('<uuid:challenge_id>/', ChallengeDetailView.as_view(), name='challenge-detail'),
+# ]
 """
 Challenge player URL routes.
 
@@ -6,9 +20,10 @@ Admin routes live in apps/admin_panel/urls.py.
 """
 from django.urls import path
 
-from .views import ChallengeDetailView, ChallengeListView
+from .views import ChallengeClaimView, ChallengeDetailView, ChallengeListView
 
 urlpatterns = [
     path('', ChallengeListView.as_view(), name='challenge-list'),
     path('<uuid:challenge_id>/', ChallengeDetailView.as_view(), name='challenge-detail'),
+    path('<uuid:challenge_id>/claim/', ChallengeClaimView.as_view(), name='challenge-claim'),
 ]

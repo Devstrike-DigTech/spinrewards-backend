@@ -33,6 +33,19 @@ from .challenge_views import (
     AdminChallengeListCreateView,
     AdminChallengeParticipantsView,
 )
+from .auth_views import (
+    AdminChangePasswordView,
+    AdminLoginView,
+    AdminLogoutView,
+    AdminMeView,
+)
+
+from .admin_mgmt_views import (
+    AdminDetailView,
+    AdminListCreateView,
+    AdminResetPasswordView,
+    AdminRolesView,
+)
 from .referral_views import AdminReferralsView
  
 
@@ -42,6 +55,13 @@ urlpatterns = [
     path('auth/logout/', AdminLogoutView.as_view(), name='admin-logout'),
     path('auth/me/', AdminMeView.as_view(), name='admin-me'),
     path('auth/change-password/', AdminChangePasswordView.as_view(), name='admin-change-password'),
+
+    # Admin management (super_admin only)
+    path('roles/',                              AdminRolesView.as_view(),         name='admin-roles'),
+    path('admins/',                             AdminListCreateView.as_view(),    name='admin-admins-list-create'),
+    path('admins/<uuid:admin_id>/',             AdminDetailView.as_view(),        name='admin-admins-detail'),
+    path('admins/<uuid:admin_id>/reset-password/', AdminResetPasswordView.as_view(), name='admin-admins-reset-password'),
+ 
     # Screen 1 — Dashboard
     path('dashboard/', DashboardView.as_view(), name='admin-dashboard'),
 

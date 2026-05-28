@@ -203,20 +203,25 @@ def test_qualify_after_deposit(referrer, referred1):
     )
     check(referral.qualified_at is not None, 'qualified_at recorded')
 
-    # Check the referrer got their reward
-    final_cash = WalletService.get_balance(referrer, 'cash')
-    check(
-        final_cash == initial_cash + Decimal('1000'),
-        f'referrer got 1000 reward (before={initial_cash}, after={final_cash})',
-    )
-
-    # Verify challenge progress was incremented
+    # Verify challenge progress was incremented + completed (but not auto-rewarded)
     challenge = Challenge.objects.get(name='SMOKE_REF_BringFriend')
     progress = ChallengeProgress.objects.filter(
         user=referrer, challenge=challenge,
     ).first()
     check(progress is not None, 'challenge progress created for referrer')
     check(progress.is_completed, 'challenge marked completed')
+    check(not progress.reward_claimed, 'referral reward not auto-claimed (manual claim)')
+
+    # Referrer claims the reward
+    from apps.challenges.engine import ChallengeEngine
+    ChallengeEngine.claim_reward(referrer, progress)
+
+    # Check the referrer got their reward after claiming
+    final_cash = WalletService.get_balance(referrer, 'cash')
+    check(
+        final_cash == initial_cash + Decimal('1000'),
+        f'referrer got 1000 reward after claim (before={initial_cash}, after={final_cash})',
+    )
 
 
 def test_second_deposit_no_requalify(referred1):

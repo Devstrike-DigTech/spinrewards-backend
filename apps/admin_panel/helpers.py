@@ -98,17 +98,24 @@ def monthly_aggregation(queryset, date_field='created_at', value_field=None, mon
 
 
 def format_user(user) -> str:
-    """Build a display name from the Telegram user model fields."""
+    """Build a display name from a User. Falls back to username or telegram id."""
     parts = [
         getattr(user, 'first_name', '') or '',
         getattr(user, 'last_name', '') or '',
     ]
     name = ' '.join(p.strip() for p in parts if p.strip())
-    return name or getattr(user, 'username', '') or f'User #{user.telegram_id}'
+    return name or getattr(user, 'username', '') or f'User #{getattr(user, "telegram_id", "?")}'
 
 
-def pct_change(current: Decimal, previous: Decimal) -> str:
-    if not previous or previous == 0:
+def pct_change(current, previous) -> str:
+    """
+    Percent change from previous to current, as a string like '+12.5' or '-3.2'.
+    Returns '0' when previous is zero.
+    """
+    current = Decimal(str(current or 0))
+    previous = Decimal(str(previous or 0))
+    if previous == 0:
         return '0'
     change = ((current - previous) / previous) * 100
-    return str(round(change, 1))
+    sign = '+' if change >= 0 else ''
+    return f'{sign}{round(float(change), 1)}'
