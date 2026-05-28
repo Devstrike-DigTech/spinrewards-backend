@@ -220,23 +220,43 @@ def test_spin_count_challenge(user1, wheel):
     check(progress.current_count == 3, 'count is 3 after third spin')
     check(progress.is_completed is True, 'challenge completed')
     check(progress.completed_at is not None, 'completed_at recorded')
-    check(progress.reward_claimed is True, 'reward marked claimed')
+    check(progress.reward_claimed is False, 'reward NOT auto-claimed (claim is manual now)')
 
-    # Verify reward distributed by checking the challenge reward transaction exists
+    # Reward should not be distributed yet — must claim first
+    pre_claim_coins = WalletService.get_balance(user1, 'coin')
+
+    # Claim the reward
+    from apps.challenges.engine import ChallengeEngine
+    result = ChallengeEngine.claim_reward(user1, progress)
+    check(result['reward_type'] == 'coins', 'claim returns coins reward type')
+    check(result['amount'] == '150', 'claim returns amount 150')
+
+    progress.refresh_from_db()
+    check(progress.reward_claimed is True, 'reward marked claimed after claim')
+
+    # Verify reward transaction now exists
     reward_tx = Transaction.objects.filter(
         user=user1,
         balance_type='coin',
         amount=Decimal('150'),
         metadata__challenge_id=str(challenge.id),
     ).first()
-    check(reward_tx is not None, 'reward transaction created for 150 coins')
+    check(reward_tx is not None, 'reward transaction created after claim')
 
-    # Balance increased by AT LEAST 150 (other challenges may add more)
+    # Balance increased by exactly 150 from the claim
     final_coins = WalletService.get_balance(user1, 'coin')
     check(
-        final_coins >= initial_coins + Decimal('150'),
-        f'coin balance increased by at least 150 (was {initial_coins}, now {final_coins})',
+        final_coins == pre_claim_coins + Decimal('150'),
+        f'coin balance increased by 150 after claim (was {pre_claim_coins}, now {final_coins})',
     )
+
+    # Double-claim should fail
+    from apps.challenges.engine import ClaimError
+    try:
+        ChallengeEngine.claim_reward(user1, progress)
+        check(False, 'double-claim should raise ClaimError')
+    except ClaimError as e:
+        check(e.code == 'ALREADY_CLAIMED', 'double-claim rejected with ALREADY_CLAIMED')
 
 
 def test_one_time_challenge_no_replay(user1, wheel):
@@ -289,18 +309,22 @@ def test_welcome_for_new_user(user2, wheel):
     progress = ChallengeProgress.objects.filter(user=user2, challenge=challenge).first()
     check(progress is not None, 'welcome progress created for new user')
     check(progress.is_completed, 'welcome completed on first spin')
+    check(not progress.reward_claimed, 'welcome reward not auto-claimed')
 
-    # Verify the welcome reward transaction exists (other challenges may also fire)
+    # Claim the welcome reward
+    from apps.challenges.engine import ChallengeEngine
+    ChallengeEngine.claim_reward(user2, progress)
+
+    progress.refresh_from_db()
+    check(progress.reward_claimed, 'welcome reward claimed')
+
     reward_tx = Transaction.objects.filter(
         user=user2,
         balance_type='coin',
         amount=Decimal('100'),
         metadata__challenge_id=str(challenge.id),
     ).first()
-    check(reward_tx is not None, 'welcome reward transaction created for 100 coins')
-
-    final = WalletService.get_balance(user2, 'coin')
-    check(final >= initial + Decimal('100'), 'coin balance increased by at least 100')
+    check(reward_tx is not None, 'welcome reward transaction created after claim')
 
 
 def test_min_stake_eligibility(user2, wheel):
@@ -369,9 +393,15 @@ def test_deposit_challenge(user1):
     progress = ChallengeProgress.objects.filter(user=user1, challenge=challenge).first()
     check(progress is not None, 'large deposit created progress')
     check(progress.is_completed, 'deposit challenge completed')
+    check(not progress.reward_claimed, 'deposit reward not auto-claimed')
+
+    # Claim the reward
+    from apps.challenges.engine import ChallengeEngine
+    pre_claim_cash = WalletService.get_balance(user1, 'cash')
+    ChallengeEngine.claim_reward(user1, progress)
 
     final_cash = WalletService.get_balance(user1, 'cash')
-    check(final_cash == initial_cash + Decimal('500'), 'cash reward credited (500)')
+    check(final_cash == pre_claim_cash + Decimal('500'), 'cash reward credited after claim (500)')
 
 
 def test_admin_list_endpoint(admin):
