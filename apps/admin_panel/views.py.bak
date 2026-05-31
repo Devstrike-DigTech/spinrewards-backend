@@ -42,7 +42,7 @@ from .helpers import (
     monthly_aggregation,
     pct_change,
 )
-from .permissions import CanApproveKYC, CanApproveWithdrawal, CanEditRTP, CanRejectKYC, CanRejectWithdrawal, IsAdminUser
+from .permissions import IsAdminUser
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -726,10 +726,7 @@ class RTPControlListCreateView(APIView):
       ]
     }
     """
-    def get_permissions(self):
-        if self.request.method == 'POST':
-            return [CanEditRTP()]
-        return [IsAdminUser()]
+    permission_classes = [IsAdminUser]
 
     def get(self, request):
         from apps.spin.models import Wheel, WheelSegment
@@ -866,10 +863,7 @@ class RTPControlDetailView(APIView):
     """
     PUT /api/v1/admin/rtp/<wheel_id>/    Edit a wheel and/or its segments
     """
-    def get_permissions(self):
-        if self.request.method in ('PUT', 'PATCH', 'DELETE'):
-            return [CanEditRTP()]
-        return [IsAdminUser()]
+    permission_classes = [IsAdminUser]
 
     def put(self, request, wheel_id):
         from apps.spin.models import Wheel, WheelSegment
@@ -1354,7 +1348,7 @@ class AdminWithdrawalApproveView(APIView):
 
     Body (optional): { "notes": "Verified manually" }
     """
-    permission_classes = [CanApproveWithdrawal]
+    permission_classes = [IsAdminUser]
 
     def post(self, request, withdrawal_id):
         from apps.withdrawals.models import Withdrawal
@@ -1395,7 +1389,7 @@ class AdminWithdrawalRejectView(APIView):
 
     Body (required): { "reason": "Suspicious activity detected" }
     """
-    permission_classes = [CanRejectWithdrawal]
+    permission_classes = [IsAdminUser]
 
     def post(self, request, withdrawal_id):
         from apps.withdrawals.models import Withdrawal
@@ -1591,7 +1585,7 @@ class AdminKYCApproveView(APIView):
 
     Body: { "section": "personal_info" | "bank_account" | "document" | "all" }
     """
-    permission_classes = [CanApproveKYC]
+    permission_classes = [IsAdminUser]
 
     def post(self, request, kyc_id):
         from apps.kyc.models import KYCProfile
@@ -1651,7 +1645,7 @@ class AdminKYCRejectView(APIView):
       "reason": "Document appears to be edited"
     }
     """
-    permission_classes = [CanRejectKYC]
+    permission_classes = [IsAdminUser]
 
     def post(self, request, kyc_id):
         from apps.kyc.models import KYCProfile

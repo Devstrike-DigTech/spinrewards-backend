@@ -75,7 +75,7 @@ Withdrawal HTTP endpoints.
   GET  /api/v1/withdrawals/limits/                  Show limits & remaining today
 """
 import logging
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from django.utils import timezone
 from rest_framework import status
@@ -84,7 +84,9 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.kyc.models import BankAccount
 from apps.wallet.services import WalletService
+from apps.withdrawals.bank_account_service import BankAccountError, BankAccountService
 
 from .models import Withdrawal
 from .serializers import (
@@ -108,20 +110,100 @@ class WithdrawalRequestView(APIView):
     """
     POST /api/v1/withdrawals/
 
-    Tiered flow:
+    Body (one of two flows):
+      Flow A — saved account:
+        { "amount": 5000, "saved_account_id": "<uuid>" }
+
+      Flow B — new account inline (resolve + name-match + save):
+        { "amount": 5000, "bank_code": "058", "account_number": "0123456789" }
+
+    Tiered processing:
       - Amount < AUTO_PAYOUT_THRESHOLD → auto-process
       - Amount ≥ AUTO_PAYOUT_THRESHOLD → manual review queue
     """
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        serializer = WithdrawalRequestSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        user = request.user
+        saved_account_id = request.data.get('saved_account_id')
+        bank_code = (request.data.get('bank_code') or '').strip()
+        account_number = (request.data.get('account_number') or '').strip()
 
+        # ── Validate amount ──────────────────────────────────────────────
+        raw_amount = request.data.get('amount')
+        if raw_amount is None:
+            return Response(
+                {'error': True, 'code': 'MISSING_AMOUNT',
+                 'message': 'Amount is required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            amount = Decimal(str(raw_amount))
+        except (InvalidOperation, TypeError):
+            return Response(
+                {'error': True, 'code': 'INVALID_AMOUNT',
+                 'message': 'Amount must be a number.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if amount <= 0:
+            return Response(
+                {'error': True, 'code': 'INVALID_AMOUNT',
+                 'message': 'Amount must be greater than zero.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # ── Resolve which account to use ─────────────────────────────────
+        bank_account = None
+
+        if saved_account_id:
+            # Flow A: existing saved account
+            try:
+                bank_account = BankAccount.objects.get(
+                    id=saved_account_id, user=user, is_active=True,
+                )
+            except BankAccount.DoesNotExist:
+                return Response(
+                    {'error': True, 'code': 'ACCOUNT_NOT_FOUND',
+                     'message': 'Saved bank account not found.'},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+        elif bank_code and account_number:
+            # Flow B: new account — resolve + match + save
+            try:
+                resolved = BankAccountService.resolve_and_match(
+                    user=user, bank_code=bank_code, account_number=account_number,
+                )
+                bank_account = BankAccountService.save_account(user, resolved)
+            except BankAccountError as e:
+                payload = {'error': True, 'code': e.code, 'message': e.message}
+                if e.extra:
+                    payload.update(e.extra)
+                http_status = {
+                    'KYC_REQUIRED':   status.HTTP_403_FORBIDDEN,
+                    'PROVIDER_ERROR': status.HTTP_503_SERVICE_UNAVAILABLE,
+                }.get(e.code, status.HTTP_400_BAD_REQUEST)
+                return Response(payload, status=http_status)
+
+        else:
+            return Response(
+                {
+                    'error': True,
+                    'code': 'MISSING_ACCOUNT',
+                    'message': (
+                        'Provide either a saved_account_id, or both bank_code '
+                        'and account_number for a new account.'
+                    ),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # ── Create the withdrawal request ────────────────────────────────
         try:
             withdrawal = WithdrawalService.request(
-                user=request.user,
-                amount=serializer.validated_data['amount'],
+                user=user,
+                amount=amount,
+                bank_account=bank_account,    # ← pass the FK
             )
         except WithdrawalServiceError as e:
             return Response(
@@ -133,7 +215,6 @@ class WithdrawalRequestView(APIView):
             {'success': True, 'data': WithdrawalResponseSerializer(withdrawal).data},
             status=status.HTTP_201_CREATED,
         )
-
 
 class WithdrawalRequestManualReviewView(APIView):
     """
