@@ -18,6 +18,13 @@ from .views import (
     WithdrawalRequestView,
 )
 
+from .bank_views import (
+    SavedAccountDetailView,
+    SavedAccountSetDefaultView,
+    SavedAccountsView,
+    WithdrawalBanksListView,
+)
+
 urlpatterns = [
     # Tiered flow (auto under threshold, manual above)
     path('', WithdrawalRequestView.as_view(), name='withdrawal-request'),
@@ -35,4 +42,12 @@ urlpatterns = [
          name='withdrawal-detail'),
     path('<uuid:withdrawal_id>/cancel/', WithdrawalCancelView.as_view(),
          name='withdrawal-cancel'),
+
+      # Bank list (mirror of /kyc/banks/)
+    path('banks/', WithdrawalBanksListView.as_view(), name='withdrawal-banks'),
+
+    # Saved accounts
+    path('saved-accounts/',SavedAccountsView.as_view(), name='saved-accounts-list-create'),
+    path('saved-accounts/<uuid:account_id>/',SavedAccountDetailView.as_view(), name='saved-accounts-detail'),
+    path('saved-accounts/<uuid:account_id>/set-default/', SavedAccountSetDefaultView.as_view(), name='saved-accounts-set-default'),
 ]

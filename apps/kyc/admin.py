@@ -103,9 +103,9 @@ class BankAccountAdmin(admin.ModelAdmin):
 class KYCDocumentAdmin(admin.ModelAdmin):
     list_display = (
         'user', 'document_type', 'original_filename',
-        'file_size_kb', 'status', 'is_active', 'uploaded_at',
+        'file_size_kb', 'status', 'uploaded_at',
     )
-    list_filter = ('document_type', 'status', 'is_active')
+    list_filter = ('document_type', 'status',)
     search_fields = ('user__telegram_id', 'original_filename')
     readonly_fields = (
         'id', 'uploaded_at', 'reviewed_at',
