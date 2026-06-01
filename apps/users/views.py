@@ -23,6 +23,10 @@ class TelegramAuthView(APIView):
             serializer.validated_data['init_data']
         )
 
+        # ── Fire login signal for challenges (daily_login, login_streak) ──
+        from apps.challenges.signals import user_logged_in_challenge
+        user_logged_in_challenge.send(sender=None, user=user)
+
         return Response({
             'success': True,
             'data': {
