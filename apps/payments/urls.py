@@ -9,6 +9,7 @@
 from django.urls import path
 
 from .views import (
+    CryptoCurrenciesListView,
     DepositDetailView,
     DepositInitiateView,
     DepositListView,
@@ -22,4 +23,5 @@ urlpatterns = [
     path('virtual-account/', VirtualAccountView.as_view(), name='virtual-account'),
     path('<uuid:deposit_id>/', DepositDetailView.as_view(), name='deposit-detail'),
     path('callback/', payment_callback_page, name='payment-callback'),
+    path('crypto/currencies/', CryptoCurrenciesListView.as_view(), name='crypto-currencies'),
 ]

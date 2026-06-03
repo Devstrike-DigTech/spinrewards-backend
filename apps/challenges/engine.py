@@ -567,111 +567,135 @@ class ChallengeEngine:
     def claim_reward(cls, user, progress: ChallengeProgress):
         """
         Claim the reward for a completed challenge progress record.
-
+    
         Called by the claim endpoint (POST /api/v1/challenges/<id>/claim/).
         Validates that:
-          - The progress belongs to the user
-          - The challenge is completed
-          - The reward hasn't already been claimed
-
+        - The progress belongs to the user
+        - The challenge is completed
+        - The reward hasn't already been claimed
+    
         Returns a dict describing the result. Raises ClaimError on failure.
-
-        Coins  → credit coin wallet
-        Cash   → credit cash wallet
-        Free spins → grant free spin (TODO)
-        Multiplier boost → store as user modifier (TODO)
+    
+        Reward routing:
+        coins / bonus_credit    → BONUS_COINS wallet (spin-only, 40% on win)
+        cash  / deposit_credit  → EARNINGS wallet (withdrawable NGN)
+        free_spins              → free spin grant (TODO)
+        multiplier_boost        → user modifier (TODO)
         """
         # ── Validations ──────────────────────────────────────────────
         if progress.user_id != user.id:
             raise ClaimError('NOT_YOURS', 'This reward does not belong to you.')
-
+    
         if not progress.is_completed:
             raise ClaimError(
                 'NOT_COMPLETED',
                 'Challenge is not completed yet. Keep going!',
             )
-
+    
         if progress.reward_claimed:
             raise ClaimError('ALREADY_CLAIMED', 'You have already claimed this reward.')
-
+    
         challenge = progress.challenge
         reward = challenge.reward
         reward_type   = reward.get('type', 'coins')
         reward_amount = Decimal(str(reward.get('amount', 0)))
-
-        # ── Distribute based on reward type ──────────────────────────
+    
+        # Normalize legacy reward type names to the new ones for routing.
+        if reward_type == 'coins':
+            normalized_type = 'bonus_credit'
+        elif reward_type == 'cash':
+            normalized_type = 'deposit_credit'
+        else:
+            normalized_type = reward_type
+    
+        # ── Distribute based on normalized reward type ──────────────────
+        from apps.wallet.services import WalletService
+        from apps.wallet.models import Transaction
+    
         with transaction.atomic():
             # Lock the progress row to prevent double-claim race conditions
             locked = ChallengeProgress.objects.select_for_update().get(id=progress.id)
             if locked.reward_claimed:
                 raise ClaimError('ALREADY_CLAIMED', 'You have already claimed this reward.')
-
+    
             credited_to = None
-
-            if reward_type == Challenge.RewardType.COINS:
-                from apps.wallet.services import WalletService
-                from apps.wallet.models import Transaction
+            balance_type_label = None
+    
+            if normalized_type == 'bonus_credit':
+                # Credit to bonus_coins (spin-only, 40% on win)
                 WalletService.credit(
                     user=user,
                     amount=reward_amount,
-                    balance_type='coin',
+                    balance_type=Transaction.BalanceType.BONUS_COINS,
                     tx_type=Transaction.Type.WIN,
                     reference_id=f'challenge_{locked.id}',
                     metadata={
                         'source': 'challenge_reward',
+                        'reward_type': 'bonus_credit',
                         'challenge_id': str(challenge.id),
                         'challenge_name': challenge.name,
                     },
                 )
-                credited_to = 'coin'
-
-            elif reward_type == Challenge.RewardType.CASH:
-                from apps.wallet.services import WalletService
-                from apps.wallet.models import Transaction
+                credited_to = 'bonus_coins'
+                balance_type_label = 'Bonus Coins'
+    
+            elif normalized_type == 'deposit_credit':
+                # Credit directly to earnings (withdrawable NGN)
                 WalletService.credit(
                     user=user,
                     amount=reward_amount,
-                    balance_type='cash',
+                    balance_type=Transaction.BalanceType.EARNINGS,
                     tx_type=Transaction.Type.WIN,
                     reference_id=f'challenge_{locked.id}',
                     metadata={
                         'source': 'challenge_reward',
+                        'reward_type': 'deposit_credit',
                         'challenge_id': str(challenge.id),
                         'challenge_name': challenge.name,
                     },
                 )
-                credited_to = 'cash'
-
-            elif reward_type == Challenge.RewardType.FREE_SPINS:
+                credited_to = 'earnings'
+                balance_type_label = 'Earnings (₦)'
+    
+            elif normalized_type == Challenge.RewardType.FREE_SPINS:
                 # TODO: SpinGrant.objects.create(user=user, spins=int(reward_amount), ...)
                 logger.info(
                     'Challenge reward (free_spins): user=%s challenge=%s spins=%s',
                     user.id, challenge.name, reward_amount,
                 )
                 credited_to = 'free_spins'
-
-            elif reward_type == Challenge.RewardType.MULTIPLIER_BOOST:
+                balance_type_label = 'Free Spins'
+    
+            elif normalized_type == Challenge.RewardType.MULTIPLIER_BOOST:
                 # TODO: UserModifier.objects.create(user=user, type='multiplier', value=reward_amount)
                 logger.info(
                     'Challenge reward (multiplier_boost): user=%s challenge=%s multiplier=%sx',
                     user.id, challenge.name, reward_amount,
                 )
                 credited_to = 'multiplier_boost'
-
+                balance_type_label = 'Multiplier Boost'
+    
+            else:
+                raise ClaimError(
+                    'UNKNOWN_REWARD_TYPE',
+                    f'Unknown reward type: {reward_type}',
+                )
+    
             # Mark claimed
             locked.reward_claimed    = True
             locked.reward_claimed_at = timezone.now()
             locked.save(update_fields=['reward_claimed', 'reward_claimed_at', 'updated_at'])
-
+    
         logger.info(
-            'Challenge reward CLAIMED: user=%s challenge=%s type=%s amount=%s',
-            user.id, challenge.name, reward_type, reward_amount,
+            'Challenge reward CLAIMED: user=%s challenge=%s type=%s amount=%s credited_to=%s',
+            user.id, challenge.name, reward_type, reward_amount, credited_to,
         )
-
+    
         return {
             'reward_type': reward_type,
             'amount': str(reward_amount),
             'credited_to': credited_to,
+            'credited_to_label': balance_type_label,
             'challenge_name': challenge.name,
         }
 

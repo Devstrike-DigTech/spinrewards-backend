@@ -1,131 +1,3 @@
-# import logging
-# from decimal import Decimal
-# from django.db import transaction as db_transaction
-# from django.db.models import Sum
-
-# from common.exceptions import InsufficientFundsError
-# from .models import Wallet, Transaction
-
-# logger = logging.getLogger(__name__)
-
-
-# class WalletService:
-
-#     @staticmethod
-#     def get_balance(user, balance_type: str = 'coin') -> Decimal:
-#         """Compute balance from ledger. Always accurate."""
-#         result = Transaction.objects.filter(
-#             user=user,
-#             balance_type=balance_type,
-#             status=Transaction.Status.COMPLETED,
-#         ).aggregate(total=Sum('amount'))
-#         return result['total'] or Decimal('0')
-
-#     @staticmethod
-#     @db_transaction.atomic
-#     def credit(
-#         user,
-#         amount: Decimal,
-#         balance_type: str,
-#         tx_type: str,
-#         reference_id: str,
-#         metadata: dict = None,
-#     ) -> Transaction:
-#         """
-#         Credit a user's wallet.
-#         Must be called inside an atomic block.
-#         """
-#         if amount <= 0:
-#             raise ValueError('Credit amount must be positive.')
-
-#         wallet = user.wallet
-
-#         # Lock wallet row to prevent race conditions
-#         Wallet.objects.select_for_update().get(pk=wallet.pk)
-
-#         balance_before = WalletService.get_balance(user, balance_type)
-#         balance_after = balance_before + amount
-
-#         tx = Transaction.objects.create(
-#             user=user,
-#             wallet=wallet,
-#             type=tx_type,
-#             balance_type=balance_type,
-#             amount=amount,
-#             balance_before=balance_before,
-#             balance_after=balance_after,
-#             reference_id=reference_id,
-#             status=Transaction.Status.COMPLETED,
-#             metadata=metadata or {},
-#         )
-
-#         logger.info(
-#             'CREDIT user=%s type=%s amount=%s balance_type=%s ref=%s',
-#             user.telegram_id, tx_type, amount, balance_type, reference_id,
-#         )
-#         return tx
-
-#     @staticmethod
-#     @db_transaction.atomic
-#     def debit(
-#         user,
-#         amount: Decimal,
-#         balance_type: str,
-#         tx_type: str,
-#         reference_id: str,
-#         metadata: dict = None,
-#     ) -> Transaction:
-#         """
-#         Debit a user's wallet.
-#         Raises InsufficientFundsError if balance is too low.
-#         Must be called inside an atomic block.
-#         """
-#         if amount <= 0:
-#             raise ValueError('Debit amount must be positive.')
-
-#         wallet = user.wallet
-
-#         # Lock wallet row to prevent race conditions
-#         Wallet.objects.select_for_update().get(pk=wallet.pk)
-
-#         balance_before = WalletService.get_balance(user, balance_type)
-
-#         if balance_before < amount:
-#             raise InsufficientFundsError(
-#                 f'Insufficient {balance_type} balance: {balance_before} < {amount}'
-#             )
-
-#         balance_after = balance_before - amount
-
-#         tx = Transaction.objects.create(
-#             user=user,
-#             wallet=wallet,
-#             type=tx_type,
-#             balance_type=balance_type,
-#             amount=-amount,  # stored as negative
-#             balance_before=balance_before,
-#             balance_after=balance_after,
-#             reference_id=reference_id,
-#             status=Transaction.Status.COMPLETED,
-#             metadata=metadata or {},
-#         )
-
-#         logger.info(
-#             'DEBIT user=%s type=%s amount=%s balance_type=%s ref=%s',
-#             user.telegram_id, tx_type, amount, balance_type, reference_id,
-#         )
-#         return tx
-
-#     @staticmethod
-#     def get_wallet_summary(user) -> dict:
-#         coin = WalletService.get_balance(user, 'coin')
-#         cash = WalletService.get_balance(user, 'cash')
-#         return {
-#             'coin_balance': str(coin),
-#             'cash_balance': str(cash),
-#             'total_balance': str(coin + cash),
-#         }
-
 """
 Wallet services — the only sanctioned way to mutate a user's wallet.
 
@@ -160,6 +32,7 @@ from common.exceptions import (
 )
 from .models import Wallet, Transaction
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -176,19 +49,27 @@ class WalletService:
         helper below to avoid TOCTOU (time-of-check vs time-of-use) bugs.
         """
         return Transaction.objects.balance_for(user, balance_type)
-
     @staticmethod
-    def get_wallet_summary(user) -> dict:
-        """All three balances + total. For the /wallet/ endpoint."""
-        coin = Transaction.objects.balance_for(user, 'coin')
-        cash = Transaction.objects.balance_for(user, 'cash')
-        staked = Transaction.objects.balance_for(user, 'staked')
-        return {
-            'coin_balance': str(coin),
-            'cash_balance': str(cash),
-            'staked_balance': str(staked),
-            'total_balance': str(coin + cash + staked),
-        }
+    def _validate_balance_type(balance_type: str) -> None:
+        """Raise ValueError if balance_type isn't in the BalanceType enum."""
+        valid = {c[0] for c in Transaction.BalanceType.choices}
+        if balance_type not in valid:
+            raise ValueError(
+                f'Invalid balance_type: {balance_type!r}. Must be one of {sorted(valid)}.'
+            )
+
+    # @staticmethod
+    # def get_wallet_summary(user) -> dict:
+    #     """All three balances + total. For the /wallet/ endpoint."""
+    #     coin = Transaction.objects.balance_for(user, 'coin')
+    #     cash = Transaction.objects.balance_for(user, 'cash')
+    #     staked = Transaction.objects.balance_for(user, 'staked')
+    #     return {
+    #         'coin_balance': str(coin),
+    #         'cash_balance': str(cash),
+    #         'staked_balance': str(staked),
+    #         'total_balance': str(coin + cash + staked),
+    #     }
 
     # ─── Internal helpers ────────────────────────────────────────────────
 
@@ -266,8 +147,9 @@ class WalletService:
         """
         if amount <= 0:
             raise ValueError('Credit amount must be positive.')
-        if balance_type not in ('coin', 'cash', 'staked'):
-            raise ValueError(f'Invalid balance_type: {balance_type}')
+        
+        WalletService._validate_balance_type(balance_type)
+
 
         existing = WalletService._get_existing_tx(reference_id)
         if existing:
@@ -316,8 +198,7 @@ class WalletService:
         """
         if amount <= 0:
             raise ValueError('Debit amount must be positive.')
-        if balance_type not in ('coin', 'cash', 'staked'):
-            raise ValueError(f'Invalid balance_type: {balance_type}')
+        WalletService._validate_balance_type(balance_type)
 
         existing = WalletService._get_existing_tx(reference_id)
         if existing:
@@ -572,3 +453,69 @@ class WalletService:
             user.telegram_id, stake_amount, lock_reference_id,
         )
         return forfeit_tx
+    
+    @staticmethod
+    def get_deposit_coins(user) -> Decimal:
+        """Coins from real deposits (Paystack/NowPayments)."""
+        return WalletService.get_balance(user, Transaction.BalanceType.DEPOSIT_COINS)
+    
+    
+    @staticmethod
+    def get_bonus_coins(user) -> Decimal:
+        """Coins from challenge bonus_credit rewards."""
+        return WalletService.get_balance(user, Transaction.BalanceType.BONUS_COINS)
+    
+    
+    @staticmethod
+    def get_earnings(user) -> Decimal:
+        """Withdrawable naira balance."""
+        return WalletService.get_balance(user, Transaction.BalanceType.EARNINGS)
+    
+    
+    @staticmethod
+    def get_total_coins(user) -> Decimal:
+        """Sum of deposit + bonus coins. For the wallet card's headline number."""
+        return (
+            WalletService.get_deposit_coins(user)
+            + WalletService.get_bonus_coins(user)
+        )
+    
+    
+    @staticmethod
+    def get_wallet_summary(user) -> dict:
+        """
+        Full wallet snapshot for the API.
+    
+        Returns:
+            {
+                'deposit_coins': '50000.00',
+                'bonus_coins': '14800.00',
+                'total_coins': '64800.00',
+                'earnings': '600.00',
+                'earnings_usd_equivalent': '0.40',
+                'staked': '0.00',
+            }
+        """
+        from apps.settings_app.services import get_setting
+        from apps.settings_app.models import SettingKey
+    
+        deposit = WalletService.get_deposit_coins(user)
+        bonus = WalletService.get_bonus_coins(user)
+        earnings = WalletService.get_earnings(user)
+        staked = WalletService.get_balance(user, Transaction.BalanceType.STAKED)
+    
+        # USD equivalent for earnings (display only)
+        ngn_per_usd = get_setting(SettingKey.NGN_PER_USD_DISPLAY_RATE)
+        usd_equivalent = (
+            (earnings / ngn_per_usd).quantize(Decimal('0.01'))
+            if ngn_per_usd > 0 else Decimal('0.00')
+        )
+    
+        return {
+            'deposit_coins': str(deposit),
+            'bonus_coins': str(bonus),
+            'total_coins': str(deposit + bonus),
+            'earnings': str(earnings),
+            'earnings_usd_equivalent': str(usd_equivalent),
+            'staked': str(staked),
+        }

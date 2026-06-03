@@ -21,6 +21,7 @@ urlpatterns = [
         path('referrals/', include('apps.referrals.urls')),
         path('challenges/', include('apps.challenges.urls')),
         path('webhooks/', include('apps.payments.webhook_urls')),
+        path('admin/settings/', include('apps.settings_app.urls')),
         path('admin/', include('apps.admin_panel.urls')),
     ])),
 ]

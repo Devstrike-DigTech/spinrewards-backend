@@ -39,6 +39,7 @@ LOCAL_APPS = [
     'apps.referrals',
     'apps.challenges',
     'apps.admin_panel',
+    'apps.settings_app',
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -295,3 +296,10 @@ else:
             'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage',
         },
     }
+
+COINS_PER_NGN = config('COINS_PER_NGN', default='1')
+COINS_PER_USD = config('COINS_PER_USD', default='1500')
+BONUS_WALLET_PAYOUT_RATE = config('BONUS_WALLET_PAYOUT_RATE', default='0.40')
+MIN_DEPOSIT_NGN = config('MIN_DEPOSIT_NGN', default='1000')
+MIN_DEPOSIT_USD = config('MIN_DEPOSIT_USD', default='20')
+NGN_PER_USD_DISPLAY_RATE = config('NGN_PER_USD_DISPLAY_RATE', default='1500')

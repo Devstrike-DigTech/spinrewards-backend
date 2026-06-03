@@ -154,14 +154,31 @@ class WheelPublicSerializer(serializers.ModelSerializer):
 
 # ─── Spin request serializers ──────────────────────────────────────────────
 
+# class SpinRequestSerializer(serializers.Serializer):
+#     """POST /api/v1/spin/"""
+#     wheel_id = serializers.UUIDField(required=True)
+#     stake_amount = serializers.DecimalField(
+#         max_digits=20, decimal_places=2, required=True,
+#     )
+#     client_seed = serializers.CharField(
+#         max_length=128, required=False, allow_blank=True, default='',
+#     )
 class SpinRequestSerializer(serializers.Serializer):
-    """POST /api/v1/spin/"""
     wheel_id = serializers.UUIDField(required=True)
     stake_amount = serializers.DecimalField(
-        max_digits=20, decimal_places=2, required=True,
+        max_digits=15, decimal_places=2, required=True,
     )
     client_seed = serializers.CharField(
-        max_length=128, required=False, allow_blank=True, default='',
+        max_length=128, required=False, allow_blank=True,
+    )
+    source_wallet = serializers.ChoiceField(
+        choices=[
+            ('deposit_coins', 'Deposit Coins'),
+            ('bonus_coins', 'Bonus Coins'),
+        ],
+        default='deposit_coins',
+        required=False,
+        help_text='Which coin balance to spin from.',
     )
 
 
