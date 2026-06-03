@@ -33,6 +33,8 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.wallet.services import WalletService
+
 from .helpers import (
     AdminPagination,
     format_user,
@@ -1074,9 +1076,10 @@ class AdminUserDetailView(APIView):
         except Exception:
             pass
 
-        cash = get_user_balance(user, 'cash')
-        coin = get_user_balance(user, 'coin')
-        staked = get_user_balance(user, 'staked')
+        # cash = get_user_balance(user, 'cash')
+        # coin = get_user_balance(user, 'coin')
+        # staked = get_user_balance(user, 'staked')
+        wallet_summary = WalletService.get_wallet_summary(user)
 
         return Response({
             'success': True,
@@ -1091,11 +1094,20 @@ class AdminUserDetailView(APIView):
                     user.last_login.strftime('%b %-d, %Y %H:%M')
                     if user.last_login else None
                 ),
-                'cash_balance': str(cash),
-                'coin_balance': str(coin),
-                'total_balance': str(cash + coin),
-                'staked': str(staked),
-                'kyc': kyc_data,
+                'wallet': {
+                    'deposit_coins': wallet_summary['deposit_coins'],
+                    'bonus_coins': wallet_summary['bonus_coins'],
+                    'total_coins': wallet_summary['total_coins'],
+                    'earnings': wallet_summary['earnings'],
+                    'earnings_usd_equivalent': wallet_summary['earnings_usd_equivalent'],
+                    'staked': wallet_summary['staked'],
+                },
+
+                # 'cash_balance': str(cash),
+                # 'coin_balance': str(coin),
+                # 'total_balance': str(cash + coin),
+                # 'staked': str(staked),
+                # 'kyc': kyc_data,
                 'risk': get_risk_level(user),
                 'bank_account': bank_data,
                 'is_active': user.is_active,

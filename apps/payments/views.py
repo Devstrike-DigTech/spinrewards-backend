@@ -1,45 +1,3 @@
-# from rest_framework.views import APIView
-# from rest_framework.generics import ListAPIView
-# from rest_framework.permissions import IsAuthenticated
-# from rest_framework.response import Response
-# from rest_framework import status
-
-# from .services import PaymentService
-# from .models import DepositSession
-# from .serializers import DepositRequestSerializer, DepositSessionSerializer
-
-
-# class DepositView(APIView):
-#     """POST /api/v1/deposits/ — Initiate a deposit."""
-#     permission_classes = [IsAuthenticated]
-
-#     def post(self, request):
-#         serializer = DepositRequestSerializer(data=request.data)
-#         serializer.is_valid(raise_exception=True)
-
-#         session = PaymentService.initiate_deposit(
-#             user=request.user,
-#             amount=serializer.validated_data['amount'],
-#             method=serializer.validated_data['method'],
-#         )
-
-#         return Response(
-#             {'success': True, 'data': DepositSessionSerializer(session).data},
-#             status=status.HTTP_201_CREATED,
-#         )
-
-
-# class DepositListView(ListAPIView):
-#     """GET /api/v1/deposits/ — Get deposit history."""
-#     permission_classes = [IsAuthenticated]
-#     serializer_class = DepositSessionSerializer
-
-#     def get_queryset(self):
-#         return DepositSession.objects.filter(user=self.request.user)
-
-#     def list(self, request, *args, **kwargs):
-#         response = super().list(request, *args, **kwargs)
-#         return Response({'success': True, 'data': response.data})
 """
 User-facing payment endpoints.
 
@@ -56,6 +14,10 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.payments.providers.nowpayments import NOWPaymentsProvider
+from decimal import Decimal
+from apps.settings_app.services import get_setting
+from apps.settings_app.models import SettingKey
 from common.exceptions import ProviderError
 
 from .models import Deposit
@@ -77,6 +39,47 @@ class DepositInitiateView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        provider_name = request.data.get('provider', '').lower()
+        amount_raw = request.data.get('amount')
+ 
+        # Parse amount
+        try:
+            amount = Decimal(str(amount_raw))
+        except Exception:
+            return Response(
+                {'error': True, 'code': 'INVALID_AMOUNT',
+                 'message': 'amount must be a number.'},
+                status=400,
+            )
+ 
+        # ─── Min deposit enforcement ──────────────────────────────────────
+        if provider_name == 'paystack':
+            min_ngn = get_setting(SettingKey.MIN_DEPOSIT_NGN)
+            if amount < min_ngn:
+                return Response(
+                    {
+                        'error': True,
+                        'code': 'BELOW_MIN_DEPOSIT',
+                        'message': f'Minimum NGN deposit is ₦{min_ngn}.',
+                        'min_amount': str(min_ngn),
+                        'currency': 'NGN',
+                    },
+                    status=400,
+                )
+        elif provider_name == 'nowpayments':
+            # `amount` here is in USD (USDT equivalent) for the crypto flow
+            min_usd = get_setting(SettingKey.MIN_DEPOSIT_USD)
+            if amount < min_usd:
+                return Response(
+                    {
+                        'error': True,
+                        'code': 'BELOW_MIN_DEPOSIT',
+                        'message': f'Minimum crypto deposit is ${min_usd}.',
+                        'min_amount': str(min_usd),
+                        'currency': 'USD',
+                    },
+                    status=400,
+                )
         serializer = DepositRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
@@ -157,3 +160,23 @@ def payment_callback_page(request):
         'status': status,
         'reference': reference,
     })
+
+class CryptoCurrenciesListView(APIView):
+    """
+    GET /api/v1/payments/crypto/currencies/
+ 
+    Returns the list of supported crypto currencies for deposits.
+    Dynamic from NowPayments. Cached server-side for 1 hour.
+    """
+    permission_classes = [IsAuthenticated]
+ 
+    def get(self, request):
+        try:
+            currencies = NOWPaymentsProvider.list_currencies()
+        except ProviderError as e:
+            return Response(
+                {'error': True, 'code': 'PROVIDER_ERROR',
+                 'message': f'Unable to fetch currencies: {e}'},
+                status=503,
+            )
+        return Response({'success': True, 'data': {'currencies': currencies}})

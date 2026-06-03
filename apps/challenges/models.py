@@ -40,10 +40,15 @@ class Challenge(models.Model):
         PERMANENT  = 'permanent',  'Permanent'
 
     class RewardType(models.TextChoices):
-        COINS            = 'coins',            'Coins'
-        CASH             = 'cash',             'Cash'
-        FREE_SPINS       = 'free_spins',       'Free Spins'
+    # New, clearer names
+        BONUS_CREDIT = 'bonus_credit', 'Bonus Credit (Coins)'
+        DEPOSIT_CREDIT = 'deposit_credit', 'Deposit Credit (Withdrawable ₦)'
+        FREE_SPINS = 'free_spins', 'Free Spins'
         MULTIPLIER_BOOST = 'multiplier_boost', 'Multiplier Boost'
+
+        # Legacy aliases (route to same buckets internally)
+        COINS = 'coins', 'Coins (legacy → bonus_credit)'
+        CASH = 'cash', 'Cash (legacy → deposit_credit)'
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 

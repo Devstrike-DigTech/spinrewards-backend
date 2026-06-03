@@ -20,6 +20,8 @@ from typing import Optional
 from django.db import transaction as db_transaction
 from django.utils import timezone
 
+from apps.settings_app.models import SettingKey
+from apps.settings_app.services import get_setting
 from apps.wallet.models import Transaction
 from apps.wallet.services import WalletService
 from common.exceptions import ProviderError
@@ -210,69 +212,134 @@ class PaymentService:
     def _complete_or_fail(
         deposit: Deposit,
         event_type: str,
-        confirmed_amount: Decimal,
-        credit_amount: Decimal,
+        confirmed_amount: Decimal,    # The raw amount confirmed (NGN or USDT)
+        credit_amount: Decimal,        # Ignored — we recompute coins here
         raw: dict,
     ) -> Deposit:
         """
-        Mark a deposit as completed (and credit wallet) or failed.
-        Caller must hold a row-level lock on `deposit` already.
+        Mark a deposit as completed and credit DEPOSIT_COINS.
+        The amount of coins credited depends on the provider:
+        - Paystack: amount_ngn × COINS_PER_NGN
+        - NowPayments: usdt_amount × COINS_PER_USD
         """
-        # Idempotency at the deposit level — already processed?
+        # Idempotency
         if deposit.status == Deposit.Status.COMPLETED:
             logger.info('Deposit already completed: %s', deposit.id)
             return deposit
         if deposit.status == Deposit.Status.FAILED:
-            logger.info('Deposit already marked failed: %s', deposit.id)
             return deposit
 
         if event_type != 'success':
             deposit.status = Deposit.Status.FAILED
-            deposit.provider_data = {**deposit.provider_data, 'webhook': raw}
-            deposit.webhook_received_at = timezone.now()
-            deposit.save(update_fields=[
-                'status', 'provider_data', 'webhook_received_at', 'updated_at',
-            ])
-            logger.info('Deposit failed: id=%s', deposit.id)
+            deposit.save()
             return deposit
 
-        # ── Success path: credit the wallet ──
-        # Coins go to the COIN balance. NGN deposits credit Coins per PRD
-        # (Coins are the play currency; Cash comes only from spin wins).
-        wallet_tx = WalletService.credit(
+        # ── Compute coins to credit based on provider ──
+        if deposit.provider == Deposit.Provider.PAYSTACK:
+            rate = get_setting(SettingKey.COINS_PER_NGN)
+            coins = (confirmed_amount * rate).quantize(Decimal('0.01'))
+            currency_label = 'NGN'
+        elif deposit.provider == Deposit.Provider.NOWPAYMENTS:
+            rate = get_setting(SettingKey.COINS_PER_USD)
+            coins = (confirmed_amount * rate).quantize(Decimal('0.01'))
+            currency_label = 'USD'
+        else:
+            coins = confirmed_amount
+            currency_label = 'UNKNOWN'
+            rate = None
+
+        # ── Credit via WalletService (handles balance_before / balance_after / locking / idempotency) ──
+        WalletService.credit(
             user=deposit.user,
-            amount=credit_amount,
-            balance_type='coin',
+            amount=coins,
+            balance_type=Transaction.BalanceType.DEPOSIT_COINS,
             tx_type=Transaction.Type.DEPOSIT,
-            reference_id=f'deposit:{deposit.id}',
+            reference_id=f'deposit-{deposit.id}',
             metadata={
-                'provider': deposit.provider,
                 'deposit_id': str(deposit.id),
+                'provider': deposit.provider,
                 'confirmed_amount': str(confirmed_amount),
-                'original_currency': deposit.original_currency or 'NGN',
+                'currency': currency_label,
+                'rate': str(rate) if rate is not None else None,
+                'coins_credited': str(coins),
             },
         )
 
         deposit.status = Deposit.Status.COMPLETED
-        deposit.wallet_transaction = wallet_tx
-        deposit.provider_data = {**deposit.provider_data, 'webhook': raw}
-        deposit.webhook_received_at = timezone.now()
         deposit.completed_at = timezone.now()
-        deposit.save(update_fields=[
-            'status', 'wallet_transaction', 'provider_data',
-            'webhook_received_at', 'completed_at', 'updated_at',
-        ])
+        deposit.save()
 
         logger.info(
-            'Deposit completed: id=%s user=%s amount=%s provider=%s',
-            deposit.id, deposit.user.telegram_id, credit_amount, deposit.provider,
+            'Deposit completed: user=%s amount=%s coins=%s',
+            deposit.user.id, confirmed_amount, coins,
         )
-
-        # Side effects (referrals, notifications) MUST be queued via on_commit
-        # so they only fire after this transaction successfully commits.
-        # Currently no-ops — uncomment when those modules exist.
-        # from django.db.transaction import on_commit
-        # on_commit(lambda: ReferralService.check_first_deposit(deposit.user.id))
-        # on_commit(lambda: notify_deposit_success.delay(...))
-
         return deposit
+    # def _complete_or_fail(
+    #     deposit: Deposit,
+    #     event_type: str,
+    #     confirmed_amount: Decimal,
+    #     credit_amount: Decimal,
+    #     raw: dict,
+    # ) -> Deposit:
+    #     """
+    #     Mark a deposit as completed (and credit wallet) or failed.
+    #     Caller must hold a row-level lock on `deposit` already.
+    #     """
+    #     # Idempotency at the deposit level — already processed?
+    #     if deposit.status == Deposit.Status.COMPLETED:
+    #         logger.info('Deposit already completed: %s', deposit.id)
+    #         return deposit
+    #     if deposit.status == Deposit.Status.FAILED:
+    #         logger.info('Deposit already marked failed: %s', deposit.id)
+    #         return deposit
+
+    #     if event_type != 'success':
+    #         deposit.status = Deposit.Status.FAILED
+    #         deposit.provider_data = {**deposit.provider_data, 'webhook': raw}
+    #         deposit.webhook_received_at = timezone.now()
+    #         deposit.save(update_fields=[
+    #             'status', 'provider_data', 'webhook_received_at', 'updated_at',
+    #         ])
+    #         logger.info('Deposit failed: id=%s', deposit.id)
+    #         return deposit
+
+    #     # ── Success path: credit the wallet ──
+    #     # Coins go to the COIN balance. NGN deposits credit Coins per PRD
+    #     # (Coins are the play currency; Cash comes only from spin wins).
+    #     wallet_tx = WalletService.credit(
+    #         user=deposit.user,
+    #         amount=credit_amount,
+    #         balance_type='coin',
+    #         tx_type=Transaction.Type.DEPOSIT,
+    #         reference_id=f'deposit:{deposit.id}',
+    #         metadata={
+    #             'provider': deposit.provider,
+    #             'deposit_id': str(deposit.id),
+    #             'confirmed_amount': str(confirmed_amount),
+    #             'original_currency': deposit.original_currency or 'NGN',
+    #         },
+    #     )
+
+    #     deposit.status = Deposit.Status.COMPLETED
+    #     deposit.wallet_transaction = wallet_tx
+    #     deposit.provider_data = {**deposit.provider_data, 'webhook': raw}
+    #     deposit.webhook_received_at = timezone.now()
+    #     deposit.completed_at = timezone.now()
+    #     deposit.save(update_fields=[
+    #         'status', 'wallet_transaction', 'provider_data',
+    #         'webhook_received_at', 'completed_at', 'updated_at',
+    #     ])
+
+    #     logger.info(
+    #         'Deposit completed: id=%s user=%s amount=%s provider=%s',
+    #         deposit.id, deposit.user.telegram_id, credit_amount, deposit.provider,
+    #     )
+
+    #     # Side effects (referrals, notifications) MUST be queued via on_commit
+    #     # so they only fire after this transaction successfully commits.
+    #     # Currently no-ops — uncomment when those modules exist.
+    #     # from django.db.transaction import on_commit
+    #     # on_commit(lambda: ReferralService.check_first_deposit(deposit.user.id))
+    #     # on_commit(lambda: notify_deposit_success.delay(...))
+
+    #     return deposit

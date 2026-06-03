@@ -26,6 +26,7 @@ reflects actual USDT received.
 import hashlib
 import hmac
 import json
+from django.core.cache import cache
 import logging
 import uuid
 from decimal import Decimal
@@ -166,3 +167,61 @@ class NOWPaymentsProvider(PaymentProvider):
             'amount': actually_paid_usdt,  # in USDT, NOT NGN
             'raw': payload,
         }
+
+    # Cache the currencies list for 1 hour to avoid hammering NowPayments
+    CURRENCIES_CACHE_KEY = 'nowpayments:currencies'
+    CURRENCIES_CACHE_TTL = 60 * 60  # 1 hour
+ 
+    @classmethod
+    def list_currencies(cls) -> list:
+        """
+        Return a list of available crypto currencies for deposits.
+ 
+        Each item:
+            {
+              'code': 'btc',
+              'name': 'Bitcoin',
+              'network': 'btc',
+              'is_stable': False,
+              'min_amount_usd': 1.0,
+              'logo_url': 'https://...',
+            }
+ 
+        Cached for 1 hour.
+        """
+        cached = cache.get(cls.CURRENCIES_CACHE_KEY)
+        if cached:
+            return cached
+ 
+        api_key = settings.NOWPAYMENTS_API_KEY
+        if not api_key:
+            raise ProviderError('NOWPayments is not configured.')
+ 
+        try:
+            resp = requests.get(
+                f'{NOWPAYMENTS_BASE}/full-currencies',
+                headers={'x-api-key': api_key},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            body = resp.json()
+        except (requests.RequestException, ValueError) as e:
+            logger.warning('NowPayments currencies fetch failed: %s', e)
+            raise ProviderError(f'Could not fetch currencies: {e}')
+ 
+        # Parse and normalize
+        currencies = []
+        for c in body.get('currencies', []):
+            if not c.get('enable', True):
+                continue
+            currencies.append({
+                'code': c.get('code', '').lower(),
+                'name': c.get('name', ''),
+                'network': c.get('network', '').lower(),
+                'is_stable': c.get('is_stable', False),
+                'min_amount_usd': c.get('min_amount', 0),
+                'logo_url': c.get('logo_url', ''),
+            })
+ 
+        cache.set(cls.CURRENCIES_CACHE_KEY, currencies, cls.CURRENCIES_CACHE_TTL)
+        return currencies

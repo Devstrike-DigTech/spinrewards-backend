@@ -20,6 +20,12 @@ from rest_framework.throttling import UserRateThrottle
 from rest_framework.views import APIView
 
 from .models import Spin, Wheel
+from common.exceptions import (
+    ConfigurationError,
+    InsufficientFundsError,
+    InvalidStakeError,
+    SpinRewardsException,
+)
 from .serializers import (
     SpinPublicSerializer,
     SpinRequestSerializer,
@@ -34,37 +40,121 @@ class SpinThrottle(UserRateThrottle):
     scope = 'spin'
 
 
+# class SpinExecuteView(APIView):
+#     """POST /api/v1/spin/"""
+#     permission_classes = [IsAuthenticated]
+#     throttle_classes = [SpinThrottle]
+
+#     def post(self, request):
+#         serializer = SpinRequestSerializer(data=request.data)
+#         serializer.is_valid(raise_exception=True)
+
+#         spin = SpinEngine.execute(
+#             user=request.user,
+#             wheel_id=serializer.validated_data['wheel_id'],
+#             stake_amount=serializer.validated_data['stake_amount'],
+#             client_seed=serializer.validated_data.get('client_seed', ''),
+#         )
+
+#         return Response(
+#             {'success': True, 'data': SpinPublicSerializer(spin).data},
+#             status=status.HTTP_200_OK,
+#         )
 class SpinExecuteView(APIView):
-    """POST /api/v1/spin/"""
+    """POST /api/v1/spin/
+ 
+    Body:
+        {
+          "wheel_id": "uuid",
+          "stake_amount": "200",
+          "client_seed": "optional",
+          "source_wallet": "deposit_coins" | "bonus_coins"
+        }
+    """
     permission_classes = [IsAuthenticated]
     throttle_classes = [SpinThrottle]
-
+ 
     def post(self, request):
         serializer = SpinRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-
-        spin = SpinEngine.execute(
-            user=request.user,
-            wheel_id=serializer.validated_data['wheel_id'],
-            stake_amount=serializer.validated_data['stake_amount'],
-            client_seed=serializer.validated_data.get('client_seed', ''),
-        )
-
+ 
+        source_wallet = serializer.validated_data.get('source_wallet', 'deposit_coins')
+ 
+        try:
+            spin = SpinEngine.execute(
+                user=request.user,
+                wheel_id=serializer.validated_data['wheel_id'],
+                stake_amount=serializer.validated_data['stake_amount'],
+                client_seed=serializer.validated_data.get('client_seed', ''),
+                source_wallet=source_wallet,
+            )
+        except InsufficientFundsError as e:
+            return Response(
+                {'error': True, 'code': 'INSUFFICIENT_BALANCE', 'message': str(e)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except InvalidStakeError as e:
+            return Response(
+                {'error': True, 'code': 'INVALID_STAKE', 'message': str(e)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except ConfigurationError as e:
+            return Response(
+                {'error': True, 'code': 'WHEEL_MISCONFIGURED', 'message': str(e)},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        except SpinRewardsException as e:
+            return Response(
+                {'error': True, 'code': 'SPIN_REJECTED', 'message': str(e)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+ 
         return Response(
             {'success': True, 'data': SpinPublicSerializer(spin).data},
             status=status.HTTP_200_OK,
         )
 
 
+# class WelcomeSpinView(APIView):
+#     """POST /api/v1/spin/welcome/"""
+#     permission_classes = [IsAuthenticated]
+#     throttle_classes = [SpinThrottle]
+
+#     def post(self, request):
+#         serializer = WelcomeSpinRequestSerializer(data=request.data)
+#         serializer.is_valid(raise_exception=True)
+
+#         welcome_wheel = Wheel.objects.filter(
+#             wheel_type=Wheel.WheelType.WELCOME,
+#             is_active=True,
+#         ).first()
+#         if not welcome_wheel:
+#             return Response(
+#                 {'error': True, 'code': 'NO_WELCOME_WHEEL',
+#                  'message': 'Welcome wheel is not configured.'},
+#                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
+#             )
+
+#         spin = SpinEngine.execute(
+#             user=request.user,
+#             wheel_id=str(welcome_wheel.id),
+#             stake_amount=None,
+#             client_seed=serializer.validated_data.get('client_seed', ''),
+#         )
+
+#         return Response(
+#             {'success': True, 'data': SpinPublicSerializer(spin).data},
+#             status=status.HTTP_200_OK,
+#         )
 class WelcomeSpinView(APIView):
-    """POST /api/v1/spin/welcome/"""
+    """POST /api/v1/spin/welcome/ — free first-time spin, payout → earnings"""
     permission_classes = [IsAuthenticated]
     throttle_classes = [SpinThrottle]
-
+ 
     def post(self, request):
         serializer = WelcomeSpinRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-
+ 
         welcome_wheel = Wheel.objects.filter(
             wheel_type=Wheel.WheelType.WELCOME,
             is_active=True,
@@ -75,19 +165,33 @@ class WelcomeSpinView(APIView):
                  'message': 'Welcome wheel is not configured.'},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
-
-        spin = SpinEngine.execute(
-            user=request.user,
-            wheel_id=str(welcome_wheel.id),
-            stake_amount=None,
-            client_seed=serializer.validated_data.get('client_seed', ''),
-        )
-
+ 
+        try:
+            spin = SpinEngine.execute(
+                user=request.user,
+                wheel_id=str(welcome_wheel.id),
+                stake_amount=None,
+                client_seed=serializer.validated_data.get('client_seed', ''),
+                # source_wallet not used for welcome, but engine requires one.
+                # Pass deposit_coins as a no-op default.
+                source_wallet='deposit_coins',
+            )
+        except SpinRewardsException as e:
+            return Response(
+                {'error': True, 'code': 'WELCOME_ALREADY_USED', 'message': str(e)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except ConfigurationError as e:
+            return Response(
+                {'error': True, 'code': 'WHEEL_MISCONFIGURED', 'message': str(e)},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+ 
         return Response(
             {'success': True, 'data': SpinPublicSerializer(spin).data},
             status=status.HTTP_200_OK,
         )
-
+ 
 
 class WheelListView(APIView):
     """

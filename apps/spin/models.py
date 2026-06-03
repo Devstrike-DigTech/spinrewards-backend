@@ -261,6 +261,7 @@ class Spin(models.Model):
 
     payout_amount = models.DecimalField(max_digits=20, decimal_places=2)
     outcome = models.CharField(max_length=20, choices=Outcome.choices)
+    source_wallet = models.CharField(max_length=20,choices=[('deposit_coins', 'Deposit Coins'),('bonus_coins', 'Bonus Coins'),],default='deposit_coins',db_index=True,help_text='Which coin balance funded this spin. Determines payout rules.',)
 
     # Provably fair (stubbed for v1)
     server_seed = models.CharField(max_length=128, blank=True)

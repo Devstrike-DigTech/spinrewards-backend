@@ -23,6 +23,8 @@
 #         read_only_fields = fields
 
 """DRF serializers."""
+from decimal import Decimal
+
 from rest_framework import serializers
 
 from apps.kyc.serializers import BankAccountResponseSerializer
@@ -32,7 +34,7 @@ from .models import Withdrawal
 
 class WithdrawalRequestSerializer(serializers.Serializer):
     amount = serializers.DecimalField(
-        max_digits=20, decimal_places=2, required=True, min_value=1,
+        max_digits=20, decimal_places=2, required=True, min_value=Decimal('1000'),
     )
 
 
