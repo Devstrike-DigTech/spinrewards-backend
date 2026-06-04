@@ -285,6 +285,57 @@ class KYCService:
             'submitted_at': profile.submitted_at,
             'last_resubmission_at': profile.last_resubmission_at,
         }
+    
+    @staticmethod
+    def upload_document(user, file, document_type) -> 'KYCDocument':
+        """
+        Save a KYC document upload (utility bill, bank statement, etc.).
+
+        Validates file size and content type. Stores the file using
+        the FileField's upload_to function.
+        """
+        from .models import KYCDocument
+
+        # Size limit (10 MB)
+        max_size = 10 * 1024 * 1024
+        if file.size > max_size:
+            raise KYCServiceError(
+                f'File too large. Maximum {max_size // 1024 // 1024}MB.'
+            )
+
+        # Accept common image and PDF types, including iPhone HEIC/HEIF
+        allowed_content_types = {
+            'image/jpeg', 'image/jpg', 'image/png',
+            'image/heic', 'image/heif',
+            'application/pdf',
+        }
+
+        # Check extension too — mobile clients sometimes send wrong content_type
+        name_lower = (file.name or '').lower()
+        has_allowed_ext = any(
+            name_lower.endswith(ext)
+            for ext in ('.jpg', '.jpeg', '.png', '.heic', '.heif', '.pdf')
+        )
+
+        if file.content_type not in allowed_content_types and not has_allowed_ext:
+            raise KYCServiceError(
+                'Unsupported file type. Allowed: JPG, PNG, HEIC, PDF.'
+            )
+
+        doc = KYCDocument.objects.create(
+            user=user,
+            document_type=document_type,
+            file=file,
+            original_filename=file.name,
+            file_size_bytes=file.size,
+            content_type=file.content_type,
+        )
+
+        logger.info(
+            'KYC document uploaded: user=%s type=%s size=%d',
+            user.id, document_type, file.size,
+        )
+        return doc
     # @staticmethod
     # @db_transaction.atomic
     # def submit(user, payload: dict) -> KYCProfile:
