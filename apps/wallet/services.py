@@ -264,9 +264,14 @@ class WalletService:
         """
         if amount <= 0:
             raise ValueError('Lock amount must be positive.')
-        if source_balance_type not in ('coin', 'cash'):
+        valid_lock_sources = (
+            Transaction.BalanceType.DEPOSIT_COINS,
+            Transaction.BalanceType.BONUS_COINS,
+        )
+        if source_balance_type not in valid_lock_sources:
             raise ValueError(
-                f'Cannot lock from {source_balance_type}; use coin or cash.'
+                f'Cannot lock from {source_balance_type}; '
+                f'use deposit_coins or bonus_coins.'
             )
 
         # Look for the staked-side leg (the canonical one)
@@ -379,11 +384,11 @@ class WalletService:
         )
 
         # Leg 2: credit cash with the full payout (stake + winnings)
-        cash_tx = WalletService._record_tx(
+        win_tx = WalletService._record_tx(
             wallet=wallet,
             user=user,
             tx_type=Transaction.Type.WIN,
-            balance_type='cash',
+            balance_type=Transaction.BalanceType.EARNINGS,
             signed_amount=total_payout,
             reference_id=f'{resolve_reference_id}:cash',
             metadata={
@@ -399,7 +404,7 @@ class WalletService:
             user.telegram_id, stake_amount, winnings, total_payout,
             lock_reference_id,
         )
-        return cash_tx
+        return win_tx
 
     @staticmethod
     @db_transaction.atomic
