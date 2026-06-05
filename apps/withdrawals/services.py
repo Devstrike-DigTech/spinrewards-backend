@@ -184,7 +184,7 @@ class WithdrawalService:
 
     @staticmethod
     @db_transaction.atomic
-    def request(user, amount: Decimal) -> Withdrawal:
+    def request(user, amount: Decimal, bank_account=None) -> Withdrawal:
         """
         Standard tiered flow.
         Auto-processes if amount < AUTO_PAYOUT_THRESHOLD; manual review otherwise.
@@ -193,11 +193,12 @@ class WithdrawalService:
             user=user,
             amount=amount,
             forced_manual_review=False,
+            bank_account=bank_account,
         )
 
     @staticmethod
     @db_transaction.atomic
-    def request_with_manual_review(user, amount: Decimal) -> Withdrawal:
+    def request_with_manual_review(user, amount: Decimal, bank_account=None) -> Withdrawal:
         """
         Forced manual review flow.
         ALL withdrawals queued for admin approval regardless of amount.
@@ -206,12 +207,13 @@ class WithdrawalService:
             user=user,
             amount=amount,
             forced_manual_review=True,
+            bank_account=bank_account,
         )
 
     # ── Shared internals ──────────────────────────────────────────────────
 
     @staticmethod
-    def _create_withdrawal(user, amount: Decimal, forced_manual_review: bool) -> Withdrawal:
+    def _create_withdrawal(user, amount: Decimal, forced_manual_review: bool, bank_account=None,) -> Withdrawal:
         """
         Validate, debit cash, create withdrawal record.
 
@@ -222,16 +224,33 @@ class WithdrawalService:
         WithdrawalService._validate_eligibility(user)
         WithdrawalService._validate_amount(amount)
         WithdrawalService._validate_daily_limits(user, amount)
+        # Use passed bank_account; fall back to active default if not provided
+        if bank_account is None:
+            bank_account = WithdrawalService._get_active_bank(user)
 
-        bank_account = WithdrawalService._get_active_bank(user)
-
-        cash_balance = WalletService.get_balance(user, 'cash')
-        if cash_balance < amount:
+        if bank_account is None:
             raise WithdrawalServiceError(
-                f'Insufficient cash balance. You have ₦{cash_balance}, '
-                f'requested ₦{amount}.'
+                'No bank account on file. Please add one to withdraw.'
             )
 
+
+        # bank_account = WithdrawalService._get_active_bank(user)
+
+        # cash_balance = WalletService.get_balance(user, 'cash')
+        # if cash_balance < amount:
+        #     raise WithdrawalServiceError(
+        #         f'Insufficient cash balance. You have ₦{cash_balance}, '
+        #         f'requested ₦{amount}.'
+        #     )
+
+        earnings_balance = WalletService.get_balance(
+            user, Transaction.BalanceType.EARNINGS
+        )
+        if earnings_balance < amount:
+            raise WithdrawalServiceError(
+                f'Insufficient earnings. You have ₦{earnings_balance}, '
+                f'requested ₦{amount}.'
+            )
         # Determine review state
         amount_requires_review = amount >= AUTO_PAYOUT_THRESHOLD()
         requires_review = forced_manual_review or amount_requires_review
@@ -260,11 +279,12 @@ class WithdrawalService:
         debit_tx = WalletService.debit(
             user=user,
             amount=amount,
-            balance_type='cash',
+            balance_type=Transaction.BalanceType.EARNINGS,
             tx_type=Transaction.Type.WITHDRAWAL,
             reference_id=reference,
             metadata={
                 'withdrawal_id': str(withdrawal.id),
+                'bank_account_id': str(bank_account.id),
                 'bank': bank_account.bank_name,
                 'account_number_masked': f'****{bank_account.account_number[-4:]}',
                 'forced_manual_review': forced_manual_review,
@@ -463,7 +483,7 @@ class WithdrawalService:
         refund_tx = WalletService.credit(
             user=withdrawal.user,
             amount=withdrawal.amount,
-            balance_type='cash',
+            balance_type=Transaction.BalanceType.EARNINGS,
             tx_type=Transaction.Type.REFUND,
             reference_id=f'{withdrawal.reference}:refund',
             metadata={
@@ -535,7 +555,7 @@ class WithdrawalService:
         refund_tx = WalletService.credit(
             user=withdrawal.user,
             amount=withdrawal.amount,
-            balance_type='cash',
+            balance_type=Transaction.BalanceType.EARNINGS,
             tx_type=Transaction.Type.REFUND,
             reference_id=f'{withdrawal.reference}:reject_refund',
             metadata={
@@ -585,7 +605,7 @@ class WithdrawalService:
         refund_tx = WalletService.credit(
             user=user,
             amount=withdrawal.amount,
-            balance_type='cash',
+            balance_type=Transaction.BalanceType.EARNINGS,
             tx_type=Transaction.Type.REFUND,
             reference_id=f'{withdrawal.reference}:cancel_refund',
             metadata={
