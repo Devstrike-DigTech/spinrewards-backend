@@ -43,6 +43,7 @@ from common.exceptions import (
 from .models import Spin, Wheel, WheelSegment
 from apps.settings_app.models import SettingKey
 from apps.settings_app.services import get_setting
+from apps.notifications.services import NotificationService
 
 logger = logging.getLogger(__name__)
 
@@ -624,6 +625,13 @@ class SpinEngine:
                 'net_credited': str(credited),
             },
         )
+        MIN_NOTIFY_AMOUNT = Decimal('1000')
+        if credited >= MIN_NOTIFY_AMOUNT:
+            NotificationService.send_async(
+                telegram_id=user.telegram_id,
+                notification_type='spin_win',
+                data={'amount': str(credited)},
+            )
         return Spin.Outcome.WIN, win_tx
 
 # class SpinService:

@@ -29,6 +29,7 @@ from django.utils import timezone
 from .models import BankAccount, KYCDocument, KYCProfile
 from .providers import get_provider
 from .providers.base import KYCProviderError
+from apps.notifications.services import NotificationService
 
 logger = logging.getLogger(__name__)
 
