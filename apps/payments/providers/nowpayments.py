@@ -78,7 +78,7 @@ class NOWPaymentsProvider(PaymentProvider):
                 f'{NOWPAYMENTS_BASE}/payment',
                 json={
                     'price_amount': float(usdt_amount),
-                    'price_currency': 'usdt',
+                    'price_currency': 'usd',
                     'pay_currency': 'usdttrc20',  # TRC-20 USDT (low fees)
                     'order_id': internal_reference,
                     'order_description': f'SpinRewards deposit for user {user.id}',
