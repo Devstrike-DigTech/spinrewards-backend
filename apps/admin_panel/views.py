@@ -1530,7 +1530,9 @@ class AdminKYCQueueView(APIView):
         for kyc in page:
             # Get latest active document
             doc = KYCDocument.objects.filter(
-                user=kyc.user, is_active=True
+                user=kyc.user,
+            ).exclude(
+                status=KYCDocument.Status.REJECTED
             ).order_by('-uploaded_at').first()
 
             # Get active bank account
