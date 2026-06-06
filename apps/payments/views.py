@@ -69,6 +69,17 @@ class DepositInitiateView(APIView):
         elif provider_name == 'nowpayments':
             # `amount` here is in USD (USDT equivalent) for the crypto flow
             min_usd = get_setting(SettingKey.MIN_DEPOSIT_USD)
+            ngn_per_usd = get_setting(SettingKey.NGN_PER_USD_DISPLAY_RATE)
+            usd_equivalent = amount / ngn_per_usd
+            if usd_equivalent < min_usd:
+                min_ngn = min_usd * ngn_per_usd
+                return Response({
+                    'error': True,
+                    'code': 'BELOW_MIN_DEPOSIT',
+                    'message': f'Minimum crypto deposit is ₦{min_ngn:.0f} (≈ ${min_usd}).',
+                    'min_amount': str(min_ngn),
+                    'currency': 'NGN',
+                }, status=400)
             if amount < min_usd:
                 return Response(
                     {
