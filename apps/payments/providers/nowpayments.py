@@ -90,11 +90,34 @@ class NOWPaymentsProvider(PaymentProvider):
                 },
                 timeout=15,
             )
-            resp.raise_for_status()
-            data = resp.json()
+        #     resp.raise_for_status()
+        #     data = resp.json()
+        # except requests.RequestException as e:
+        #     logger.error('NOWPayments init HTTP error: %s', e)
+        #     raise ProviderError('NOWPayments is currently unavailable.')
         except requests.RequestException as e:
-            logger.error('NOWPayments init HTTP error: %s', e)
+            logger.error('NOWPayments network error: %s', e)
             raise ProviderError('NOWPayments is currently unavailable.')
+
+        # Log the body BEFORE raise_for_status so we can see error details
+        if resp.status_code >= 400:
+            logger.error(
+                'NOWPayments returned %s: body=%s',
+                resp.status_code, resp.text[:1000],
+            )
+            # Try to extract their error message
+            try:
+                body = resp.json()
+                error_msg = body.get('message') or body.get('error') or resp.text[:200]
+            except (ValueError, AttributeError):
+                error_msg = resp.text[:200]
+            raise ProviderError(f'NOWPayments rejected: {error_msg}')
+
+        try:
+            data = resp.json()
+        except ValueError:
+            logger.error('NOWPayments returned non-JSON: %s', resp.text[:500])
+            raise ProviderError('NOWPayments returned invalid response.')
 
         if 'pay_address' not in data:
             logger.warning('NOWPayments rejected: %s', data)
@@ -215,12 +238,12 @@ class NOWPaymentsProvider(PaymentProvider):
             if not c.get('enable', True):
                 continue
             currencies.append({
-                'code': c.get('code', '').lower(),
-                'name': c.get('name', ''),
-                'network': c.get('network', '').lower(),
-                'is_stable': c.get('is_stable', False),
-                'min_amount_usd': c.get('min_amount', 0),
-                'logo_url': c.get('logo_url', ''),
+                'code': (c.get('code') or '').lower(),
+                'name': c.get('name') or '',
+                'network': (c.get('network') or '').lower(),
+                'is_stable': c.get('is_stable') or False,
+                'min_amount_usd': c.get('min_amount') or 0,
+                'logo_url': c.get('logo_url') or '',
             })
  
         cache.set(cls.CURRENCIES_CACHE_KEY, currencies, cls.CURRENCIES_CACHE_TTL)

@@ -40,6 +40,7 @@ LOCAL_APPS = [
     'apps.challenges',
     'apps.admin_panel',
     'apps.settings_app',
+    'apps.notifications',
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -303,3 +304,7 @@ BONUS_WALLET_PAYOUT_RATE = config('BONUS_WALLET_PAYOUT_RATE', default='0.40')
 MIN_DEPOSIT_NGN = config('MIN_DEPOSIT_NGN', default='1000')
 MIN_DEPOSIT_USD = config('MIN_DEPOSIT_USD', default='20')
 NGN_PER_USD_DISPLAY_RATE = config('NGN_PER_USD_DISPLAY_RATE', default='1500')
+
+# ─── Notifications ─────────────────────────────────────────────────────
+NOTIFY_SERVICE_URL = config('NOTIFY_SERVICE_URL', default='')
+NOTIFY_SECRET = config('NOTIFY_SECRET', default='')

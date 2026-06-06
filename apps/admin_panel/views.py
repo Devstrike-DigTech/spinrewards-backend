@@ -25,6 +25,7 @@ Endpoints:
 import logging
 from datetime import timedelta
 from decimal import Decimal
+import profile
 
 from django.contrib.auth import get_user_model
 from django.db.models import Count, Max, Q, Sum
@@ -33,6 +34,7 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.notifications.services import NotificationService
 from apps.wallet.services import WalletService
 
 from .helpers import (
@@ -1640,6 +1642,11 @@ class AdminKYCApproveView(APIView):
 
         kyc.reviewed_at = timezone.now()
         kyc.save()
+        NotificationService.send_async(
+            telegram_id=profile.user.telegram_id,
+            notification_type='kyc_approved',
+            data={},
+        )
 
         logger.info(
             'KYC %s section=%s approved by admin %s',
@@ -1708,6 +1715,12 @@ class AdminKYCRejectView(APIView):
 
         kyc.reviewed_at = timezone.now()
         kyc.save()
+
+        NotificationService.send_async(
+            telegram_id=profile.user.telegram_id,
+            notification_type='kyc_rejected',
+            data={'reason': reason or 'Please review and resubmit your KYC.'},
+        )
 
         logger.info(
             'KYC %s section=%s rejected by admin %s',

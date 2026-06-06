@@ -31,7 +31,7 @@ from .providers.base import PaymentProvider
 from .providers.paystack import PaystackProvider
 from .providers.monnify import MonnifyProvider
 from .providers.nowpayments import NOWPaymentsProvider, get_ngn_per_usdt
-
+from apps.notifications.services import NotificationService
 logger = logging.getLogger(__name__)
 
 
@@ -272,6 +272,11 @@ class PaymentService:
         logger.info(
             'Deposit completed: user=%s amount=%s coins=%s',
             deposit.user.id, confirmed_amount, coins,
+        )
+        NotificationService.send_async(
+            telegram_id=deposit.user.telegram_id,
+            notification_type='deposit_success',
+            data={'amount': str(coins)},   # show coins credited
         )
         return deposit
     # def _complete_or_fail(
