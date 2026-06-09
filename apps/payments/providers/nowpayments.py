@@ -69,8 +69,12 @@ class NOWPaymentsProvider(PaymentProvider):
         if not api_key:
             raise ProviderError('NOWPayments is not configured.')
 
+        # ngn_per_usdt = get_ngn_per_usdt()
+        # usdt_amount = (amount / ngn_per_usdt).quantize(Decimal('0.00000001'))
         ngn_per_usdt = get_ngn_per_usdt()
-        usdt_amount = (amount / ngn_per_usdt).quantize(Decimal('0.00000001'))
+        usdt_amount = amount.quantize(Decimal('0.00000001'))
+        ngn_equivalent = (amount * ngn_per_usdt).quantize(Decimal('0.01'))
+
         internal_reference = f'NOW-{uuid.uuid4().hex[:24].upper()}'
 
         try:
@@ -127,7 +131,7 @@ class NOWPaymentsProvider(PaymentProvider):
 
         return Deposit.objects.create(
             user=user,
-            amount=amount,
+            amount=ngn_equivalent,
             provider=Deposit.Provider.NOWPAYMENTS,
             internal_reference=internal_reference,
             provider_reference=str(data.get('payment_id', '')),
