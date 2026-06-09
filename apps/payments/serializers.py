@@ -29,7 +29,7 @@ from .models import Deposit, VirtualAccount
 class DepositRequestSerializer(serializers.Serializer):
     """Body for POST /deposits/"""
     amount = serializers.DecimalField(
-        max_digits=20, decimal_places=2, min_value=Decimal('100'),
+        max_digits=20, decimal_places=2, min_value=Decimal('0.01'),
     )
     provider = serializers.ChoiceField(choices=Deposit.Provider.choices)
 
