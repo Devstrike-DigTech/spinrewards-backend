@@ -67,6 +67,7 @@ Critical:
 import json
 import logging
 
+from rest_framework import status
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -155,3 +156,104 @@ class NOWPaymentsWebhookView(APIView):
         return _process(
             self, NOWPaymentsProvider(), Deposit.Provider.NOWPAYMENTS, request,
         )
+    
+class NOWPaymentsPayoutWebhookView(APIView):
+    """
+    POST /webhooks/nowpayments-payout/
+ 
+    NowPayments calls this when a crypto withdrawal payout finishes.
+    Verifies the HMAC-SHA512 signature and applies the result.
+ 
+    Different endpoint from the deposit webhook — different payload shape,
+    different signing secret (NOWPAYMENTS_PAYOUT_WEBHOOK_SECRET).
+    """
+    permission_classes = [AllowAny]  # Verified by signature, not auth
+ 
+    def post(self, request):
+        # Lazy imports to keep top-of-file clean
+        from apps.withdrawals.providers.nowpayments_payout import (
+            NOWPaymentsPayoutProvider,
+        )
+        from apps.withdrawals.models import Withdrawal
+        from apps.withdrawals.services import WithdrawalService
+ 
+        provider = NOWPaymentsPayoutProvider()
+ 
+        # ─── Verify signature ──────────────────────────────────────────
+        signature_valid = provider.verify_webhook_signature(
+            payload_bytes=request.body,
+            headers=request.headers,
+        )
+        if not signature_valid:
+            logger.warning(
+                'NowPayments payout webhook: signature verification FAILED. '
+                'headers=%s', dict(request.headers),
+            )
+            return Response(
+                {'error': True, 'code': 'INVALID_SIGNATURE'},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+ 
+        # ─── Parse payload ─────────────────────────────────────────────
+        try:
+            payload = json.loads(request.body)
+        except json.JSONDecodeError as e:
+            logger.error(
+                'NowPayments payout webhook: invalid JSON: %s body=%s',
+                e, request.body[:500],
+            )
+            return Response(
+                {'error': True, 'code': 'INVALID_PAYLOAD'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+ 
+        # ─── Extract event ─────────────────────────────────────────────
+        event = provider.parse_webhook(payload)
+        if event is None:
+            # Intermediate status (creating/sending/waiting) — ack but do nothing
+            logger.info(
+                'NowPayments payout webhook: non-actionable status, ignoring',
+            )
+            return Response({'received': True}, status=status.HTTP_200_OK)
+ 
+        # ─── Find the matching withdrawal ──────────────────────────────
+        reference = event['reference']
+        try:
+            withdrawal = Withdrawal.objects.get(reference=reference)
+        except Withdrawal.DoesNotExist:
+            logger.warning(
+                'NowPayments payout webhook for unknown withdrawal: ref=%s',
+                reference,
+            )
+            # Return 200 anyway to prevent NowPayments from retrying forever
+            return Response({'received': True}, status=status.HTTP_200_OK)
+ 
+        if withdrawal.rail != Withdrawal.Rail.CRYPTO:
+            logger.warning(
+                'Payout webhook received for non-crypto withdrawal: %s rail=%s',
+                withdrawal.id, withdrawal.rail,
+            )
+            return Response({'received': True}, status=status.HTTP_200_OK)
+ 
+        # ─── Apply the event ───────────────────────────────────────────
+        if event['event_type'] == 'completed':
+            WithdrawalService.complete_from_payout_webhook(
+                withdrawal,
+                tx_hash=event.get('tx_hash', ''),
+            )
+            logger.info(
+                'Crypto withdrawal completed via webhook: %s tx_hash=%s',
+                withdrawal.id, event.get('tx_hash', '')[:20],
+            )
+ 
+        elif event['event_type'] == 'failed':
+            WithdrawalService._mark_failed(
+                withdrawal,
+                reason=f'NowPayments payout failed (webhook): {payload.get("status")}',
+            )
+            logger.info(
+                'Crypto withdrawal marked failed via webhook: %s',
+                withdrawal.id,
+            )
+ 
+        return Response({'received': True}, status=status.HTTP_200_OK)

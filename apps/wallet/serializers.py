@@ -37,6 +37,6 @@ class TransactionSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'type', 'balance_type', 'amount',
             'balance_before', 'balance_after',
-            'reference_id', 'status', 'metadata', 'created_at',
+            'reference_id', 'status', 'currency', 'metadata', 'created_at',
         ]
         read_only_fields = fields

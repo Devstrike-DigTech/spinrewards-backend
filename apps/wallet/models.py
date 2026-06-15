@@ -99,15 +99,46 @@ class Transaction(models.Model):
         REVERSAL = 'reversal', 'Reversal'
         REFUND = 'refund', 'Refund'
 
+   
     # class BalanceType(models.TextChoices):
-    #     COIN = 'coin', 'Coin'      # play currency, not withdrawable
-    #     CASH = 'cash', 'Cash'      # winnings, withdrawable post-KYC
-    #     STAKED = 'staked', 'Staked'  # locked for a pending spin
+    #     DEPOSIT_COINS = 'deposit_coins', 'Deposit Coins'
+    #     BONUS_COINS = 'bonus_coins', 'Bonus Coins'
+    #     EARNINGS = 'earnings', 'Earnings (NGN)'
+    #     STAKED = 'staked', 'Staked'
     class BalanceType(models.TextChoices):
-        DEPOSIT_COINS = 'deposit_coins', 'Deposit Coins'
+        """
+        v3 wallet model — provenance-preserving balance buckets.
+ 
+        Spendable (spinnable) coin buckets — currency-segregated by origin:
+            CRYPTO_COINS  — funded by USDT deposits, 1 coin = 1 USDT
+            NAIRA_COINS   — funded by NGN deposits, 1 coin = ₦1
+            BONUS_COINS   — funded by challenge rewards, platform-pegged
+ 
+        Withdrawable balances (the "cash out" side):
+            CRYPTO_WITHDRAW — USDT-pegged; receives crypto-coin wins
+            NAIRA_WITHDRAW  — NGN-pegged; receives naira-coin wins
+ 
+        Bonus wins route to crypto OR naira withdraw at the user's choice,
+        at platform-set conversion rates.
+ 
+        Transient:
+            STAKED — locked during in-flight spin
+        """
+        # Spendable buckets
+        CRYPTO_COINS = 'crypto_coins', 'Crypto Coins (USDT)'
+        NAIRA_COINS = 'naira_coins', 'Naira Coins (NGN)'
         BONUS_COINS = 'bonus_coins', 'Bonus Coins'
-        EARNINGS = 'earnings', 'Earnings (NGN)'
+ 
+        # Withdrawable balances
+        CRYPTO_WITHDRAW = 'crypto_withdraw', 'Crypto Withdraw Balance (USDT)'
+        NAIRA_WITHDRAW = 'naira_withdraw', 'Naira Withdraw Balance (NGN)'
+ 
+        # Transient hold
         STAKED = 'staked', 'Staked'
+
+    class Currency(models.TextChoices):
+        NGN = 'NGN', 'Nigerian Naira'
+        USDT = 'USDT', 'Tether USD (TRC-20)'
 
     class Status(models.TextChoices):
         PENDING = 'pending', 'Pending'
@@ -125,6 +156,7 @@ class Transaction(models.Model):
 
     type = models.CharField(max_length=20, choices=Type.choices)
     balance_type = models.CharField(max_length=50, choices=BalanceType.choices)
+    currency = models.CharField(max_length=8, choices=Currency.choices, default=Currency.NGN, db_index=True, help_text='Real-world currency this transaction represents.')
 
     # Signed: positive = credit, negative = debit. Stored at higher precision
     # than current needs for headroom (gaming + future multi-currency).

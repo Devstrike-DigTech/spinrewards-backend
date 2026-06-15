@@ -35,7 +35,7 @@ def _read_from_db(key: str) -> Optional[Decimal]:
 
 
 def _read_from_env(key: str) -> Optional[Decimal]:
-    """Read the setting from Django settings / env (e.g. settings.COINS_PER_NGN)."""
+    """Read the setting from Django settings / env (e.g. settings.BONUS_PAYOUT_RATE)."""
     raw = getattr(dj_settings, key, None)
     if raw is None:
         return None

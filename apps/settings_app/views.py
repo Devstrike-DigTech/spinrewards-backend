@@ -15,7 +15,7 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.admin_panel.permissions import CanEditRTP
+from apps.admin_panel.permissions import CanEditSettings, CanViewSettings
 
 from .models import SettingKey
 from .services import get_all_settings, set_setting
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 class AdminSettingsListView(APIView):
     """GET /api/v1/admin/settings/  — list all settings + current values."""
-    permission_classes = [CanEditRTP]
+    permission_classes = [CanViewSettings]
 
     def get(self, request):
         return Response({
@@ -40,7 +40,7 @@ class AdminSettingDetailView(APIView):
 
     Body: { "value": "1500" }
     """
-    permission_classes = [CanEditRTP]
+    permission_classes = [CanEditSettings]
 
     def patch(self, request, key):
         if key not in SettingKey.DEFAULTS:

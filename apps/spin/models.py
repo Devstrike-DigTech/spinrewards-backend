@@ -245,6 +245,15 @@ class Spin(models.Model):
         PUSH = 'push', 'Push'
         PARTIAL_LOSS = 'partial_loss', 'Partial Loss'
 
+    class SourceWallet(models.TextChoices):
+        CRYPTO_COINS = 'crypto_coins', 'Crypto Coins'
+        NAIRA_COINS = 'naira_coins', 'Naira Coins'
+        BONUS_COINS = 'bonus_coins', 'Bonus Coins'
+
+    class BonusDestination(models.TextChoices):
+        CRYPTO = 'crypto', 'Crypto Withdraw Balance'
+        NAIRA = 'naira', 'Naira Withdraw Balance'
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(
         'users.User', on_delete=models.CASCADE, related_name='spins',
@@ -261,9 +270,49 @@ class Spin(models.Model):
 
     payout_amount = models.DecimalField(max_digits=20, decimal_places=2)
     outcome = models.CharField(max_length=20, choices=Outcome.choices)
-    source_wallet = models.CharField(max_length=20,choices=[('deposit_coins', 'Deposit Coins'),('bonus_coins', 'Bonus Coins'),],default='deposit_coins',db_index=True,help_text='Which coin balance funded this spin. Determines payout rules.',)
+    payout_currency = models.CharField(
+        max_length=8,
+        choices=[
+            ('', 'N/A (loss)'),
+            ('NGN', 'Naira'),
+            ('USDT', 'USDT'),
+        ],
+        blank=True,
+        default='',
+        help_text='Real-world currency credited on a win. Empty for losses.',
+    )
+    credited_balance = models.CharField(
+        max_length=20,
+        choices=[
+            ('', 'N/A (loss)'),
+            ('crypto_withdraw', 'Crypto Withdraw Balance'),
+            ('naira_withdraw', 'Naira Withdraw Balance'),
+            ('naira_coins', 'Naira Coins (push refund)'),
+            ('crypto_coins', 'Crypto Coins (push refund)'),
+            ('bonus_coins', 'Bonus Coins (push refund)'),
+        ],
+        blank=True,
+        default='',
+        help_text=(
+            'Where the payout was credited. For wins: a withdraw balance. '
+            'For pushes: the origin coin bucket. Empty for losses.'
+        ),
+    )
+    # source_wallet = models.CharField(max_length=20,choices=[('deposit_coins', 'Deposit Coins'),('bonus_coins', 'Bonus Coins'),],default='deposit_coins',db_index=True,help_text='Which coin balance funded this spin. Determines payout rules.',)
+    source_wallet = models.CharField(max_length=20, choices=SourceWallet.choices, default=SourceWallet.NAIRA_COINS, db_index=True, help_text='Which coin balance funded this spin. Determines payout rules.')
+    bonus_destination = models.CharField(
+        max_length=10,
+        choices=BonusDestination.choices,
+        blank=True,
+        default='',
+        help_text=(
+            'Which withdraw balance bonus wins should be credited to. '
+            'Required only when source_wallet=bonus_coins. '
+            'Empty string for non-bonus spins.'
+        ),
+    )
 
-    # Provably fair (stubbed for v1)
+    # # Provably fair (stubbed for v1)
     server_seed = models.CharField(max_length=128, blank=True)
     server_seed_hash = models.CharField(max_length=128, blank=True)
     client_seed = models.CharField(max_length=128, blank=True)
