@@ -40,36 +40,53 @@ class SpinThrottle(UserRateThrottle):
     scope = 'spin'
 
 
-# class SpinExecuteView(APIView):
-#     """POST /api/v1/spin/"""
-#     permission_classes = [IsAuthenticated]
-#     throttle_classes = [SpinThrottle]
 
-#     def post(self, request):
-#         serializer = SpinRequestSerializer(data=request.data)
-#         serializer.is_valid(raise_exception=True)
-
-#         spin = SpinEngine.execute(
-#             user=request.user,
-#             wheel_id=serializer.validated_data['wheel_id'],
-#             stake_amount=serializer.validated_data['stake_amount'],
-#             client_seed=serializer.validated_data.get('client_seed', ''),
-#         )
-
-#         return Response(
-#             {'success': True, 'data': SpinPublicSerializer(spin).data},
-#             status=status.HTTP_200_OK,
-#         )
 class SpinExecuteView(APIView):
-    """POST /api/v1/spin/
- 
+    """
+    POST /api/v1/spin/
+
+    Execute a wheel spin. Lifecycle: lock stake → spin → resolve.
+
     Body:
-        {
-          "wheel_id": "uuid",
-          "stake_amount": "200",
-          "client_seed": "optional",
-          "source_wallet": "deposit_coins" | "bonus_coins"
+      wheel_id          UUID of an active wheel
+      stake_amount      Amount to stake (string or decimal)
+      source_wallet     "crypto_coins" | "naira_coins" | "bonus_coins"
+      bonus_destination "crypto" | "naira"  -- REQUIRED if source_wallet=bonus_coins
+      client_seed       optional, for provably-fair RNG
+
+    Routing rules (per v3):
+      crypto_coins  → stake debited from crypto_coins; wins land in crypto_withdraw_balance @ 100%
+      naira_coins   → stake debited from naira_coins;  wins land in naira_withdraw_balance @ 100%
+      bonus_coins:
+        bonus_destination=crypto → wins land in crypto_withdraw at BONUS_PAYOUT_RATE × BONUS_TO_USDT_RATE
+        bonus_destination=naira  → wins land in naira_withdraw  at BONUS_PAYOUT_RATE × BONUS_TO_NGN_RATE
+
+    Push (mult=1)   → stake refunded to source bucket
+    Loss (mult=0)   → stake forfeited, no credit
+
+    Response (success):
+      {
+        "data": {
+          "id":                 spin UUID,
+          "reference":          "spin_...",
+          "wheel":              { ... },
+          "stake_amount":       "100.00",
+          "source_wallet":      "bonus_coins",
+          "bonus_destination":  "naira",
+          "payout_amount":      "300.00",     // gross, before bonus rate
+          "outcome":            "win" | "loss" | "push" | "partial_loss",
+          "payout_currency":    "NGN" | "USDT" | "",
+          "credited_balance":   "naira_withdraw" | "crypto_withdraw" | "naira_coins" | ... | "",
+          "segment_landed":     { "label": "3x", "multiplier": "3" },
+          "created_at":         iso
         }
+      }
+
+    Error codes:
+      400 INSUFFICIENT_FUNDS    — user lacks balance in source_wallet
+      400 INVALID_STAKE         — stake outside wheel range or invalid
+      400 bonus_destination     — missing destination on bonus spin
+      400 INVALID_WHEEL         — wheel inactive or doesn't accept this stake
     """
     permission_classes = [IsAuthenticated]
     throttle_classes = [SpinThrottle]
@@ -78,19 +95,40 @@ class SpinExecuteView(APIView):
         serializer = SpinRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
  
-        source_wallet = serializer.validated_data.get('source_wallet', 'deposit_coins')
+        source_wallet = serializer.validated_data.get('source_wallet', 'naira_coins')
+        bonus_destination = serializer.validated_data.get('bonus_destination', '')
+        client_seed = serializer.validated_data.get('client_seed', '')
  
+        # try:
+        #     spin = SpinEngine.execute(
+        #         user=request.user,
+        #         wheel_id=serializer.validated_data['wheel_id'],
+        #         stake_amount=serializer.validated_data['stake_amount'],
+        #         client_seed=serializer.validated_data.get('client_seed', ''),
+        #         source_wallet=source_wallet,
+        #     )
+        # except InsufficientFundsError as e:
+        #     return Response(
+        #         {'error': True, 'code': 'INSUFFICIENT_BALANCE', 'message': str(e)},
+        #         status=status.HTTP_400_BAD_REQUEST,
+        #     )
+        # except InvalidStakeError as e:
+        #     return Response(
+        #         {'error': True, 'code': 'INVALID_STAKE', 'message': str(e)},
+        #         status=status.HTTP_400_BAD_REQUEST,
+        #     )
         try:
-            spin = SpinEngine.execute(
+            spin, resolution_tx = SpinEngine.execute(
                 user=request.user,
                 wheel_id=serializer.validated_data['wheel_id'],
                 stake_amount=serializer.validated_data['stake_amount'],
-                client_seed=serializer.validated_data.get('client_seed', ''),
                 source_wallet=source_wallet,
+                bonus_destination=bonus_destination,
+                client_seed=client_seed,
             )
         except InsufficientFundsError as e:
             return Response(
-                {'error': True, 'code': 'INSUFFICIENT_BALANCE', 'message': str(e)},
+                {'error': True, 'code': 'INSUFFICIENT_FUNDS', 'message': str(e)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         except InvalidStakeError as e:
@@ -115,37 +153,6 @@ class SpinExecuteView(APIView):
         )
 
 
-# class WelcomeSpinView(APIView):
-#     """POST /api/v1/spin/welcome/"""
-#     permission_classes = [IsAuthenticated]
-#     throttle_classes = [SpinThrottle]
-
-#     def post(self, request):
-#         serializer = WelcomeSpinRequestSerializer(data=request.data)
-#         serializer.is_valid(raise_exception=True)
-
-#         welcome_wheel = Wheel.objects.filter(
-#             wheel_type=Wheel.WheelType.WELCOME,
-#             is_active=True,
-#         ).first()
-#         if not welcome_wheel:
-#             return Response(
-#                 {'error': True, 'code': 'NO_WELCOME_WHEEL',
-#                  'message': 'Welcome wheel is not configured.'},
-#                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
-#             )
-
-#         spin = SpinEngine.execute(
-#             user=request.user,
-#             wheel_id=str(welcome_wheel.id),
-#             stake_amount=None,
-#             client_seed=serializer.validated_data.get('client_seed', ''),
-#         )
-
-#         return Response(
-#             {'success': True, 'data': SpinPublicSerializer(spin).data},
-#             status=status.HTTP_200_OK,
-#         )
 class WelcomeSpinView(APIView):
     """POST /api/v1/spin/welcome/ — free first-time spin, payout → earnings"""
     permission_classes = [IsAuthenticated]
@@ -173,8 +180,8 @@ class WelcomeSpinView(APIView):
                 stake_amount=None,
                 client_seed=serializer.validated_data.get('client_seed', ''),
                 # source_wallet not used for welcome, but engine requires one.
-                # Pass deposit_coins as a no-op default.
-                source_wallet='deposit_coins',
+                # Welcome spins always use naira_coins as the placeholder source.
+                source_wallet='naira_coins',
             )
         except SpinRewardsException as e:
             return Response(

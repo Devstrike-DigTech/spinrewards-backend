@@ -10,6 +10,8 @@
 from django.urls import path
 
 from .views import (
+    CryptoWalletDetailView,
+    CryptoWalletListCreateView,
     WithdrawalCancelView,
     WithdrawalDetailView,
     WithdrawalLimitsView,
@@ -42,6 +44,12 @@ urlpatterns = [
          name='withdrawal-detail'),
     path('<uuid:withdrawal_id>/cancel/', WithdrawalCancelView.as_view(),
          name='withdrawal-cancel'),
+    path('crypto-wallets/',
+         CryptoWalletListCreateView.as_view(),
+         name='crypto-wallet-list-create'),
+    path('crypto-wallets/<uuid:wallet_id>/',
+         CryptoWalletDetailView.as_view(),
+         name='crypto-wallet-detail'),
 
       # Bank list (mirror of /kyc/banks/)
     path('banks/', WithdrawalBanksListView.as_view(), name='withdrawal-banks'),

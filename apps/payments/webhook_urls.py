@@ -9,6 +9,7 @@ from django.urls import path
 
 from .webhook_views import (
     MonnifyWebhookView,
+    NOWPaymentsPayoutWebhookView,
     NOWPaymentsWebhookView,
     PaystackWebhookView,
 )
@@ -17,4 +18,10 @@ urlpatterns = [
     path('paystack/', PaystackWebhookView.as_view(), name='webhook-paystack'),
     path('monnify/', MonnifyWebhookView.as_view(), name='webhook-monnify'),
     path('nowpayments/', NOWPaymentsWebhookView.as_view(), name='webhook-nowpayments'),
+    # ─── Payouts (v3 — crypto withdrawal confirmations) ──────────
+    path(
+        'nowpayments-payout/',
+        NOWPaymentsPayoutWebhookView.as_view(),
+        name='webhook-nowpayments-payout',
+    ),
 ]

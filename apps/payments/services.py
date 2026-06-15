@@ -219,8 +219,8 @@ class PaymentService:
         """
         Mark a deposit as completed and credit DEPOSIT_COINS.
         The amount of coins credited depends on the provider:
-        - Paystack: amount_ngn × COINS_PER_NGN
-        - NowPayments: usdt_amount × COINS_PER_USD
+        - Paystack: amount_ngn → naira_coins at 1:1
+        - NowPayments: usdt_amount → crypto_coins at 1:1
         """
         # Idempotency
         if deposit.status == Deposit.Status.COMPLETED:
@@ -235,24 +235,60 @@ class PaymentService:
             return deposit
 
         # ── Compute coins to credit based on provider ──
+        # if deposit.provider == Deposit.Provider.PAYSTACK:
+        #     rate = get_setting(SettingKey.COINS_PER_NGN)
+        #     coins = (confirmed_amount * rate).quantize(Decimal('0.01'))
+        #     currency_label = 'NGN'
+        # elif deposit.provider == Deposit.Provider.NOWPAYMENTS:
+        #     rate = get_setting(SettingKey.COINS_PER_USD)
+        #     coins = (confirmed_amount * rate).quantize(Decimal('0.01'))
+        #     currency_label = 'USD'
+        # else:
+        #     coins = confirmed_amount
+        #     currency_label = 'UNKNOWN'
+        #     rate = None
+
+        # # ── Credit via WalletService (handles balance_before / balance_after / locking / idempotency) ──
+        # WalletService.credit(
+        #     user=deposit.user,
+        #     amount=coins,
+        #     balance_type=Transaction.BalanceType.NAIRA_WITHDRAW,
+        #     tx_type=Transaction.Type.DEPOSIT,
+        #     reference_id=f'deposit-{deposit.id}',
+        #     metadata={
+        #         'deposit_id': str(deposit.id),
+        #         'provider': deposit.provider,
+        #         'confirmed_amount': str(confirmed_amount),
+        #         'currency': currency_label,
+        #         'rate': str(rate) if rate is not None else None,
+        #         'coins_credited': str(coins),
+        #     },
+        # )
         if deposit.provider == Deposit.Provider.PAYSTACK:
-            rate = get_setting(SettingKey.COINS_PER_NGN)
-            coins = (confirmed_amount * rate).quantize(Decimal('0.01'))
+            # Paystack: NGN → naira_coins at 1:1
+            credit_amount = confirmed_amount.quantize(Decimal('0.01'))
+            credit_balance_type = Transaction.BalanceType.NAIRA_COINS
             currency_label = 'NGN'
         elif deposit.provider == Deposit.Provider.NOWPAYMENTS:
-            rate = get_setting(SettingKey.COINS_PER_USD)
-            coins = (confirmed_amount * rate).quantize(Decimal('0.01'))
-            currency_label = 'USD'
+            # NowPayments: USDT → crypto_coins at 1:1
+            credit_amount = confirmed_amount.quantize(Decimal('0.000001'))
+            credit_balance_type = Transaction.BalanceType.CRYPTO_COINS
+            currency_label = 'USDT'
         else:
-            coins = confirmed_amount
+            # Unknown provider — credit as NGN by default, log warning
+            logger.warning(
+                'Unknown provider %s for deposit %s — defaulting to naira_coins',
+                deposit.provider, deposit.id,
+            )
+            credit_amount = confirmed_amount.quantize(Decimal('0.01'))
+            credit_balance_type = Transaction.BalanceType.NAIRA_COINS
             currency_label = 'UNKNOWN'
-            rate = None
-
-        # ── Credit via WalletService (handles balance_before / balance_after / locking / idempotency) ──
+ 
+        # ── Credit via WalletService ──
         WalletService.credit(
             user=deposit.user,
-            amount=coins,
-            balance_type=Transaction.BalanceType.DEPOSIT_COINS,
+            amount=credit_amount,
+            balance_type=credit_balance_type,
             tx_type=Transaction.Type.DEPOSIT,
             reference_id=f'deposit-{deposit.id}',
             metadata={
@@ -260,8 +296,8 @@ class PaymentService:
                 'provider': deposit.provider,
                 'confirmed_amount': str(confirmed_amount),
                 'currency': currency_label,
-                'rate': str(rate) if rate is not None else None,
-                'coins_credited': str(coins),
+                'credited_to': credit_balance_type,
+                'amount_credited': str(credit_amount),
             },
         )
 
@@ -269,14 +305,27 @@ class PaymentService:
         deposit.completed_at = timezone.now()
         deposit.save()
 
+        # logger.info(
+        #     'Deposit completed: user=%s amount=%s coins=%s',
+        #     deposit.user.id, confirmed_amount, coins,
+        # )
         logger.info(
-            'Deposit completed: user=%s amount=%s coins=%s',
-            deposit.user.id, confirmed_amount, coins,
+            'Deposit completed: user=%s provider=%s amount=%s %s credited_to=%s',
+            deposit.user.id, deposit.provider, credit_amount,
+            currency_label, credit_balance_type,
         )
+        # NotificationService.send_async(
+        #     telegram_id=deposit.user.telegram_id,
+        #     notification_type='deposit_success',
+        #     data={'amount': str(coins)},   # show coins credited
+        # )
         NotificationService.send_async(
             telegram_id=deposit.user.telegram_id,
             notification_type='deposit_success',
-            data={'amount': str(coins)},   # show coins credited
+            data={
+                'amount': str(credit_amount),
+                'currency': currency_label,
+            },
         )
         return deposit
     # def _complete_or_fail(

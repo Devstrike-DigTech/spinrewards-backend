@@ -80,7 +80,7 @@ class AdminProfile(models.Model):
 VIEW_ALL = {
     'view_dashboard', 'view_financials', 'view_users', 'view_kyc',
     'view_withdrawals', 'view_fraud', 'view_audit_logs',
-    'view_challenges', 'view_referrals', 'view_rtp',
+    'view_challenges', 'view_referrals', 'view_rtp', 'view_settings',
 }
 
 ROLE_PERMISSIONS = {
@@ -90,10 +90,10 @@ ROLE_PERMISSIONS = {
         'approve_withdrawal', 'reject_withdrawal',
         'approve_kyc', 'reject_kyc',
         'freeze_user', 'unfreeze_user', 'delete_user', 'flag_user', 'unflag_user',
-        'manage_admins',
+        'manage_admins', 'edit_settings',
     },
     AdminProfile.Role.FINANCE_ADMIN: VIEW_ALL | {
-        'approve_withdrawal', 'reject_withdrawal',
+        'approve_withdrawal', 'reject_withdrawal',  'edit_settings',
     },
     AdminProfile.Role.SUPPORT_ADMIN: VIEW_ALL | {
         'approve_kyc', 'reject_kyc',

@@ -39,16 +39,45 @@ logger = logging.getLogger(__name__)
 class WalletService:
 
     # ─── Reads ───────────────────────────────────────────────────────────
+    BALANCE_TYPE_CURRENCY = {
+        Transaction.BalanceType.CRYPTO_COINS: Transaction.Currency.USDT,
+        Transaction.BalanceType.NAIRA_COINS: Transaction.Currency.NGN,
+        Transaction.BalanceType.BONUS_COINS: Transaction.Currency.NGN,  # bonus coins are platform-issued; default to NGN
+        Transaction.BalanceType.CRYPTO_WITHDRAW: Transaction.Currency.USDT,
+        Transaction.BalanceType.NAIRA_WITHDRAW: Transaction.Currency.NGN,
+        Transaction.BalanceType.STAKED: Transaction.Currency.NGN,  # transient — currency follows source; override at call site if needed
+    }
 
+    # @staticmethod
+    # def get_balance(user, balance_type: str = 'coin') -> Decimal:
+    #     """
+    #     Read current balance from the ledger. Always accurate.
+
+    #     For most callers this is fine. Inside a mutation, prefer the locked
+    #     helper below to avoid TOCTOU (time-of-check vs time-of-use) bugs.
+    #     """
+    #     return Transaction.objects.balance_for(user, balance_type)
+    # @staticmethod
+    # def get_balance(user, balance_type: str) -> Decimal:
+    # # def _validate_balance_type(balance_type: str) -> None:
+    #     """Raise ValueError if balance_type isn't in the BalanceType enum."""
+    #     valid = {c[0] for c in Transaction.BalanceType.choices}
+    #     if balance_type not in valid:
+    #         raise ValueError(
+    #             f'Invalid balance_type: {balance_type!r}. Must be one of {sorted(valid)}.'
+    #         )
     @staticmethod
-    def get_balance(user, balance_type: str = 'coin') -> Decimal:
+    def get_balance(user, balance_type: str) -> Decimal:
         """
         Read current balance from the ledger. Always accurate.
 
         For most callers this is fine. Inside a mutation, prefer the locked
         helper below to avoid TOCTOU (time-of-check vs time-of-use) bugs.
         """
-        return Transaction.objects.balance_for(user, balance_type)
+        WalletService._validate_balance_type(balance_type)
+        balance = Transaction.objects.balance_for(user, balance_type)
+        return balance if balance is not None else Decimal('0')
+
     @staticmethod
     def _validate_balance_type(balance_type: str) -> None:
         """Raise ValueError if balance_type isn't in the BalanceType enum."""
@@ -57,21 +86,6 @@ class WalletService:
             raise ValueError(
                 f'Invalid balance_type: {balance_type!r}. Must be one of {sorted(valid)}.'
             )
-
-    # @staticmethod
-    # def get_wallet_summary(user) -> dict:
-    #     """All three balances + total. For the /wallet/ endpoint."""
-    #     coin = Transaction.objects.balance_for(user, 'coin')
-    #     cash = Transaction.objects.balance_for(user, 'cash')
-    #     staked = Transaction.objects.balance_for(user, 'staked')
-    #     return {
-    #         'coin_balance': str(coin),
-    #         'cash_balance': str(cash),
-    #         'staked_balance': str(staked),
-    #         'total_balance': str(coin + cash + staked),
-    #     }
-
-    # ─── Internal helpers ────────────────────────────────────────────────
 
     @staticmethod
     def _get_existing_tx(reference_id: str) -> Optional[Transaction]:
@@ -92,6 +106,12 @@ class WalletService:
           - The Wallet row's only purpose IS to serve as this lock
         """
         return Wallet.objects.select_for_update().get(user=user)
+    @staticmethod
+    def _resolve_currency(balance_type: str) -> str:
+        """Return the canonical currency for a balance_type."""
+        return WalletService.BALANCE_TYPE_CURRENCY.get(
+            balance_type, Transaction.Currency.NGN
+        )
 
     @staticmethod
     def _record_tx(
@@ -119,6 +139,7 @@ class WalletService:
             wallet=wallet,
             type=tx_type,
             balance_type=balance_type,
+            currency=WalletService._resolve_currency(balance_type),
             amount=signed_amount,
             balance_before=balance_before,
             balance_after=balance_after,
@@ -233,18 +254,7 @@ class WalletService:
         )
         return tx
 
-    # ─── Staking lifecycle ───────────────────────────────────────────────
-    #
-    # A stake is a two-leg ledger event:
-    #   leg 1: debit source (coin or cash) — money leaves the user's spendable balance
-    #   leg 2: credit staked                — money is now locked
-    #
-    # On spin resolution:
-    #   WIN  → release(): debit staked, credit cash with (stake + winnings)
-    #   LOSS → forfeit(): debit staked (gone, house keeps it)
-    #
-    # The original lock's reference_id is the spin's idempotency anchor; we
-    # derive child reference_ids by suffix so each ledger row stays unique.
+    
 
     @staticmethod
     @db_transaction.atomic
@@ -264,14 +274,24 @@ class WalletService:
         """
         if amount <= 0:
             raise ValueError('Lock amount must be positive.')
+        # valid_lock_sources = (
+        #     Transaction.BalanceType.DEPOSIT_COINS,
+        #     Transaction.BalanceType.BONUS_COINS,
+        # )
+        # if source_balance_type not in valid_lock_sources:
+        #     raise ValueError(
+        #         f'Cannot lock from {source_balance_type}; '
+        #         f'use deposit_coins or bonus_coins.'
+        #     )
         valid_lock_sources = (
-            Transaction.BalanceType.DEPOSIT_COINS,
+            Transaction.BalanceType.CRYPTO_COINS,
+            Transaction.BalanceType.NAIRA_COINS,
             Transaction.BalanceType.BONUS_COINS,
         )
         if source_balance_type not in valid_lock_sources:
             raise ValueError(
                 f'Cannot lock from {source_balance_type}; '
-                f'use deposit_coins or bonus_coins.'
+                f'use crypto_coins, naira_coins, or bonus_coins.'
             )
 
         # Look for the staked-side leg (the canonical one)
@@ -388,7 +408,7 @@ class WalletService:
             wallet=wallet,
             user=user,
             tx_type=Transaction.Type.WIN,
-            balance_type=Transaction.BalanceType.EARNINGS,
+            balance_type=Transaction.BalanceType.NAIRA_WITHDRAW,
             signed_amount=total_payout,
             reference_id=f'{resolve_reference_id}:cash',
             metadata={
@@ -459,68 +479,134 @@ class WalletService:
         )
         return forfeit_tx
     
-    @staticmethod
-    def get_deposit_coins(user) -> Decimal:
-        """Coins from real deposits (Paystack/NowPayments)."""
-        return WalletService.get_balance(user, Transaction.BalanceType.DEPOSIT_COINS)
+    # @staticmethod
+    # def get_deposit_coins(user) -> Decimal:
+    #     """Coins from real deposits (Paystack/NowPayments)."""
+    #     return WalletService.get_balance(user, Transaction.BalanceType.DEPOSIT_COINS)
     
+    
+    # @staticmethod
+    # def get_bonus_coins(user) -> Decimal:
+    #     """Coins from challenge bonus_credit rewards."""
+    #     return WalletService.get_balance(user, Transaction.BalanceType.BONUS_COINS)
+    
+    
+    # @staticmethod
+    # def get_earnings(user) -> Decimal:
+    #     """Withdrawable naira balance."""
+    #     return WalletService.get_balance(user, Transaction.BalanceType.EARNINGS)
+    
+    
+    # @staticmethod
+    # def get_total_coins(user) -> Decimal:
+    #     """Sum of deposit + bonus coins. For the wallet card's headline number."""
+    #     return (
+    #         WalletService.get_deposit_coins(user)
+    #         + WalletService.get_bonus_coins(user)
+    #     )
+    @staticmethod
+    def get_crypto_coins(user) -> Decimal:
+    # """Spendable USDT-denominated coins."""
+        return WalletService.get_balance(user, Transaction.BalanceType.CRYPTO_COINS)
+ 
+    @staticmethod
+    def get_naira_coins(user) -> Decimal:
+        """Spendable NGN-denominated coins."""
+        return WalletService.get_balance(user, Transaction.BalanceType.NAIRA_COINS)
     
     @staticmethod
     def get_bonus_coins(user) -> Decimal:
-        """Coins from challenge bonus_credit rewards."""
+        """Spendable bonus coins (platform-pegged)."""
         return WalletService.get_balance(user, Transaction.BalanceType.BONUS_COINS)
     
+    @staticmethod
+    def get_crypto_withdraw_balance(user) -> Decimal:
+        """USDT withdrawable balance."""
+        return WalletService.get_balance(user, Transaction.BalanceType.CRYPTO_WITHDRAW)
     
     @staticmethod
-    def get_earnings(user) -> Decimal:
-        """Withdrawable naira balance."""
-        return WalletService.get_balance(user, Transaction.BalanceType.EARNINGS)
+    def get_naira_withdraw_balance(user) -> Decimal:
+        """NGN withdrawable balance."""
+        return WalletService.get_balance(user, Transaction.BalanceType.NAIRA_WITHDRAW)
     
     
-    @staticmethod
-    def get_total_coins(user) -> Decimal:
-        """Sum of deposit + bonus coins. For the wallet card's headline number."""
-        return (
-            WalletService.get_deposit_coins(user)
-            + WalletService.get_bonus_coins(user)
-        )
+    # @staticmethod
+    # def get_wallet_summary(user) -> dict:
+    #     """
+    #     Full wallet snapshot for the API.
     
+    #     Returns:
+    #         {
+    #             'deposit_coins': '50000.00',
+    #             'bonus_coins': '14800.00',
+    #             'total_coins': '64800.00',
+    #             'earnings': '600.00',
+    #             'earnings_usd_equivalent': '0.40',
+    #             'staked': '0.00',
+    #         }
+    #     """
+    #     from apps.settings_app.services import get_setting
+    #     from apps.settings_app.models import SettingKey
     
+    #     deposit = WalletService.get_deposit_coins(user)
+    #     bonus = WalletService.get_bonus_coins(user)
+    #     earnings = WalletService.get_earnings(user)
+    #     staked = WalletService.get_balance(user, Transaction.BalanceType.STAKED)
+    
+    #     # USD equivalent for earnings (display only)
+    #     ngn_per_usd = get_setting(SettingKey.NGN_PER_USD_DISPLAY_RATE)
+    #     usd_equivalent = (
+    #         (earnings / ngn_per_usd).quantize(Decimal('0.01'))
+    #         if ngn_per_usd > 0 else Decimal('0.00')
+    #     )
+    
+    #     return {
+    #         'deposit_coins': str(deposit),
+    #         'bonus_coins': str(bonus),
+    #         'total_coins': str(deposit + bonus),
+    #         'earnings': str(earnings),
+    #         'earnings_usd_equivalent': str(usd_equivalent),
+    #         'staked': str(staked),
+    #     }
     @staticmethod
     def get_wallet_summary(user) -> dict:
         """
-        Full wallet snapshot for the API.
+        v3 wallet snapshot — 3 spendable coin buckets + 2 withdrawable balances.
     
         Returns:
             {
-                'deposit_coins': '50000.00',
-                'bonus_coins': '14800.00',
-                'total_coins': '64800.00',
-                'earnings': '600.00',
-                'earnings_usd_equivalent': '0.40',
-                'staked': '0.00',
+                'crypto_coins': '0.000000',
+                'naira_coins': '50000.00',
+                'bonus_coins': '1200.00',
+                'crypto_withdraw_balance': '0.000000',
+                'naira_withdraw_balance': '6000.00',
+                'naira_withdraw_usd_equivalent': '4.00',
+                'staked': '0.00'
             }
         """
         from apps.settings_app.services import get_setting
         from apps.settings_app.models import SettingKey
     
-        deposit = WalletService.get_deposit_coins(user)
-        bonus = WalletService.get_bonus_coins(user)
-        earnings = WalletService.get_earnings(user)
+        crypto_coins = WalletService.get_balance(user, Transaction.BalanceType.CRYPTO_COINS)
+        naira_coins = WalletService.get_balance(user, Transaction.BalanceType.NAIRA_COINS)
+        bonus_coins = WalletService.get_balance(user, Transaction.BalanceType.BONUS_COINS)
+        crypto_withdraw = WalletService.get_balance(user, Transaction.BalanceType.CRYPTO_WITHDRAW)
+        naira_withdraw = WalletService.get_balance(user, Transaction.BalanceType.NAIRA_WITHDRAW)
         staked = WalletService.get_balance(user, Transaction.BalanceType.STAKED)
     
-        # USD equivalent for earnings (display only)
+        # Display-only USD equivalent of the naira withdraw balance
         ngn_per_usd = get_setting(SettingKey.NGN_PER_USD_DISPLAY_RATE)
         usd_equivalent = (
-            (earnings / ngn_per_usd).quantize(Decimal('0.01'))
+            (naira_withdraw / ngn_per_usd).quantize(Decimal('0.01'))
             if ngn_per_usd > 0 else Decimal('0.00')
         )
     
         return {
-            'deposit_coins': str(deposit),
-            'bonus_coins': str(bonus),
-            'total_coins': str(deposit + bonus),
-            'earnings': str(earnings),
-            'earnings_usd_equivalent': str(usd_equivalent),
-            'staked': str(staked),
+            'crypto_coins': str(crypto_coins.quantize(Decimal('0.000001'))),
+            'naira_coins': str(naira_coins.quantize(Decimal('0.01'))),
+            'bonus_coins': str(bonus_coins.quantize(Decimal('0.01'))),
+            'crypto_withdraw_balance': str(crypto_withdraw.quantize(Decimal('0.000001'))),
+            'naira_withdraw_balance': str(naira_withdraw.quantize(Decimal('0.01'))),
+            'naira_withdraw_usd_equivalent': str(usd_equivalent),
+            'staked': str(staked.quantize(Decimal('0.01'))),
         }

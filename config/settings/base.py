@@ -308,3 +308,17 @@ NGN_PER_USD_DISPLAY_RATE = config('NGN_PER_USD_DISPLAY_RATE', default='1500')
 # ─── Notifications ─────────────────────────────────────────────────────
 NOTIFY_SERVICE_URL = config('NOTIFY_SERVICE_URL', default='')
 NOTIFY_SECRET = config('NOTIFY_SECRET', default='')
+
+NOWPAYMENTS_PAYOUT_MODE = config('NOWPAYMENTS_PAYOUT_MODE', default='mock')
+ 
+NOWPAYMENTS_PAYOUT_API_KEY = config('NOWPAYMENTS_PAYOUT_API_KEY', default='')
+NOWPAYMENTS_PAYOUT_JWT = config('NOWPAYMENTS_PAYOUT_JWT', default='')
+NOWPAYMENTS_PAYOUT_2FA_CODE = config('NOWPAYMENTS_PAYOUT_2FA_CODE', default='')
+ 
+NOWPAYMENTS_PAYOUT_WEBHOOK_SECRET = config(
+    'NOWPAYMENTS_PAYOUT_WEBHOOK_SECRET', default='',
+)
+ 
+NOWPAYMENTS_PAYOUT_MOCK_FAILURE_RATE = float(
+    config('NOWPAYMENTS_PAYOUT_MOCK_FAILURE_RATE', default='0'),
+)

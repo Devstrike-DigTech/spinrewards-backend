@@ -108,6 +108,13 @@ class CanEditRTP(HasAdminPermission):
     required_action = 'edit_rtp'
     message = 'You do not have permission to edit RTP settings.'
 
+class CanViewSettings(HasAdminPermission):
+    required_permission = 'view_settings'
+
+
+class CanEditSettings(HasAdminPermission):
+    required_permission = 'edit_settings'
+
 
 class CanCreateChallenge(HasAdminPermission):
     required_action = 'create_challenge'

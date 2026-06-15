@@ -146,19 +146,64 @@ class DashboardView(APIView):
             })
         # ── KPIs ──────────────────────────────────────────────────────
         # Total Revenue = total amount staked in the period
+        # spins_qs = _filter(Spin.objects.all())
+        # total_staked = spins_qs.aggregate(t=Sum('stake_amount'))['t'] or Decimal('0')
+        # total_won = spins_qs.filter(outcome='win').aggregate(
+        #     t=Sum('payout_amount')
+        # )['t'] or Decimal('0')
+
+        # # GGR = total staked - total won
+        # ggr = total_staked - total_won
+        # ── KPIs (per-currency, never summed) ──────────────────────────
         spins_qs = _filter(Spin.objects.all())
-        total_staked = spins_qs.aggregate(t=Sum('stake_amount'))['t'] or Decimal('0')
-        total_won = spins_qs.filter(outcome='win').aggregate(
+
+        # ── Split spins by source currency ────
+        # naira_coins + bonus_coins (with bonus_destination='naira') → NGN side
+        # crypto_coins + bonus_coins (with bonus_destination='crypto') → USDT side
+        ngn_spins = spins_qs.filter(
+            Q(source_wallet='naira_coins') |
+            Q(source_wallet='bonus_coins', bonus_destination='naira')
+        )
+        usdt_spins = spins_qs.filter(
+            Q(source_wallet='crypto_coins') |
+            Q(source_wallet='bonus_coins', bonus_destination='crypto')
+        )
+
+        # ── NGN side ────
+        ngn_staked = ngn_spins.aggregate(t=Sum('stake_amount'))['t'] or Decimal('0')
+        ngn_won = ngn_spins.filter(outcome='win').aggregate(
             t=Sum('payout_amount')
         )['t'] or Decimal('0')
+        ngn_ggr = ngn_staked - ngn_won
 
-        # GGR = total staked - total won
-        ggr = total_staked - total_won
+        # ── USDT side ────
+        usdt_staked = usdt_spins.aggregate(t=Sum('stake_amount'))['t'] or Decimal('0')
+        usdt_won = usdt_spins.filter(outcome='win').aggregate(
+            t=Sum('payout_amount')
+        )['t'] or Decimal('0')
+        usdt_ggr = usdt_staked - usdt_won
+
+        # ── Operational metrics (currency-agnostic) ────
+        total_spins = spins_qs.count()
+        winning_spins = spins_qs.filter(outcome='win').count()
+        player_win_rate = (
+            round((winning_spins / total_spins) * 100, 1)
+            if total_spins > 0 else 0
+        )
 
         # Realized house edge = (staked - won) / staked * 100
-        realized_house_edge = (
-            round(float(ggr / total_staked) * 100, 2)
-            if total_staked > 0 else Decimal('0')
+        # realized_house_edge = (
+        #     round(float(ggr / total_staked) * 100, 2)
+        #     if total_staked > 0 else Decimal('0')
+        # )
+        # Realized house edge — per currency
+        ngn_house_edge = (
+            round(float(ngn_ggr / ngn_staked) * 100, 2)
+            if ngn_staked > 0 else 0
+        )
+        usdt_house_edge = (
+            round(float(usdt_ggr / usdt_staked) * 100, 2)
+            if usdt_staked > 0 else 0
         )
 
         # Player win rate = winning spins / total spins * 100
@@ -192,22 +237,57 @@ class DashboardView(APIView):
             prev_start = timezone.make_aware(_dt(_year - 1, 1, 1, 0, 0, 0))
             prev_end   = timezone.make_aware(_dt(_year - 1, 12, 31, 23, 59, 59))
 
+        # prev_spins = Spin.objects.filter(
+        #     created_at__gte=prev_start, created_at__lte=prev_end,
+        # )
+        # prev_staked = prev_spins.aggregate(t=Sum('stake_amount'))['t'] or Decimal('0')
+        # prev_won_amt = prev_spins.filter(outcome='win').aggregate(
+        #     t=Sum('payout_amount')
+        # )['t'] or Decimal('0')
+        # prev_ggr = prev_staked - prev_won_amt
+        # revenue_change = pct_change(total_staked, prev_staked)
+        # ggr_change = pct_change(ggr, prev_ggr)
         prev_spins = Spin.objects.filter(
             created_at__gte=prev_start, created_at__lte=prev_end,
         )
-        prev_staked = prev_spins.aggregate(t=Sum('stake_amount'))['t'] or Decimal('0')
-        prev_won_amt = prev_spins.filter(outcome='win').aggregate(
+
+        # Prev period NGN
+        prev_ngn_spins = prev_spins.filter(
+            Q(source_wallet='naira_coins') |
+            Q(source_wallet='bonus_coins', bonus_destination='naira')
+        )
+        prev_ngn_staked = prev_ngn_spins.aggregate(
+            t=Sum('stake_amount')
+        )['t'] or Decimal('0')
+        prev_ngn_won = prev_ngn_spins.filter(outcome='win').aggregate(
             t=Sum('payout_amount')
         )['t'] or Decimal('0')
-        prev_ggr = prev_staked - prev_won_amt
-        revenue_change = pct_change(total_staked, prev_staked)
-        ggr_change = pct_change(ggr, prev_ggr)
+        prev_ngn_ggr = prev_ngn_staked - prev_ngn_won
+
+        # Prev period USDT
+        prev_usdt_spins = prev_spins.filter(
+            Q(source_wallet='crypto_coins') |
+            Q(source_wallet='bonus_coins', bonus_destination='crypto')
+        )
+        prev_usdt_staked = prev_usdt_spins.aggregate(
+            t=Sum('stake_amount')
+        )['t'] or Decimal('0')
+        prev_usdt_won = prev_usdt_spins.filter(outcome='win').aggregate(
+            t=Sum('payout_amount')
+        )['t'] or Decimal('0')
+        prev_usdt_ggr = prev_usdt_staked - prev_usdt_won
+
+        ngn_revenue_change = pct_change(ngn_staked, prev_ngn_staked)
+        usdt_revenue_change = pct_change(usdt_staked, prev_usdt_staked)
+        ngn_ggr_change = pct_change(ngn_ggr, prev_ngn_ggr)
+        usdt_ggr_change = pct_change(usdt_ggr, prev_usdt_ggr)
 
         # ── Graph data ─────────────────────────────────────────────────
         if use_daily:
             # Daily breakdown — every day of the month included (zeros for no activity)
-            daily_qs = (
-                spins_qs
+            # NGN daily series
+            ngn_daily = (
+                ngn_spins
                 .annotate(day=TruncDay('created_at'))
                 .values('day')
                 .annotate(
@@ -216,71 +296,196 @@ class DashboardView(APIView):
                     spin_count=Count('id'),
                 )
             )
-            # Build lookup: day_of_month → data
-            daily_lookup = {}
-            for row in daily_qs:
-                if row['day']:
-                    d_staked = row['staked'] or Decimal('0')
-                    d_won = row['won'] or Decimal('0')
-                    daily_lookup[row['day'].day] = {
-                        'staked': d_staked,
-                        'won': d_won,
-                        'spins': row['spin_count'],
-                    }
-
-            # Generate entry for EVERY day in the month
-            month_name = MONTH_NAMES_LIST[_month] if _month else ''
-            last_day_of_month = _cal.monthrange(_year, _month)[1]
-            graph_data = []
-            for day_num in range(1, last_day_of_month + 1):
-                row = daily_lookup.get(day_num, {'staked': Decimal('0'), 'won': Decimal('0'), 'spins': 0})
-                graph_data.append({
-                    'day': day_num,
-                    'month': month_name,
-                    'year': _year,
-                    'staked': str(row['staked']),
-                    'won': str(row['won']),
-                    'ggr': str(row['staked'] - row['won']),
-                    'spins': row['spins'],
-                })
-        else:
-            # Monthly aggregation — every month of the year included (zeros for no activity)
-            monthly_qs = (
-                spins_qs
-                .annotate(month=TruncMonth('created_at'))
-                .values('month')
+            # USDT daily series
+            usdt_daily = (
+                usdt_spins
+                .annotate(day=TruncDay('created_at'))
+                .values('day')
                 .annotate(
                     staked=Sum('stake_amount'),
                     won=Sum('payout_amount'),
                     spin_count=Count('id'),
                 )
             )
-            # Build lookup: month_number → data
-            monthly_lookup = {}
-            for row in monthly_qs:
-                if row['month']:
-                    m_staked = row['staked'] or Decimal('0')
-                    m_won = row['won'] or Decimal('0')
-                    monthly_lookup[row['month'].month] = {
-                        'staked': m_staked,
-                        'won': m_won,
+
+            ngn_lookup = {}
+            for row in ngn_daily:
+                if row['day']:
+                    ngn_lookup[row['day'].day] = {
+                        'staked': row['staked'] or Decimal('0'),
+                        'won': row['won'] or Decimal('0'),
+                        'spins': row['spin_count'],
+                    }
+            usdt_lookup = {}
+            for row in usdt_daily:
+                if row['day']:
+                    usdt_lookup[row['day'].day] = {
+                        'staked': row['staked'] or Decimal('0'),
+                        'won': row['won'] or Decimal('0'),
                         'spins': row['spin_count'],
                     }
 
-            # Generate entry for EVERY month (1-12)
+            month_name = MONTH_NAMES_LIST[_month] if _month else ''
+            last_day_of_month = _cal.monthrange(_year, _month)[1]
+            graph_data = []
+            for day_num in range(1, last_day_of_month + 1):
+                ngn_row = ngn_lookup.get(day_num, {
+                    'staked': Decimal('0'), 'won': Decimal('0'), 'spins': 0,
+                })
+                usdt_row = usdt_lookup.get(day_num, {
+                    'staked': Decimal('0'), 'won': Decimal('0'), 'spins': 0,
+                })
+                graph_data.append({
+                    'day': day_num,
+                    'month': month_name,
+                    'year': _year,
+                    'ngn': {
+                        'staked': str(ngn_row['staked']),
+                        'won': str(ngn_row['won']),
+                        'ggr': str(ngn_row['staked'] - ngn_row['won']),
+                        'spins': ngn_row['spins'],
+                    },
+                    'usdt': {
+                        'staked': str(usdt_row['staked']),
+                        'won': str(usdt_row['won']),
+                        'ggr': str(usdt_row['staked'] - usdt_row['won']),
+                        'spins': usdt_row['spins'],
+                    },
+                })
+            # daily_qs = (
+            #     spins_qs
+            #     .annotate(day=TruncDay('created_at'))
+            #     .values('day')
+            #     .annotate(
+            #         staked=Sum('stake_amount'),
+            #         won=Sum('payout_amount'),
+            #         spin_count=Count('id'),
+            #     )
+            # )
+            # # Build lookup: day_of_month → data
+            # daily_lookup = {}
+            # for row in daily_qs:
+            #     if row['day']:
+            #         d_staked = row['staked'] or Decimal('0')
+            #         d_won = row['won'] or Decimal('0')
+            #         daily_lookup[row['day'].day] = {
+            #             'staked': d_staked,
+            #             'won': d_won,
+            #             'spins': row['spin_count'],
+            #         }
+
+            # # Generate entry for EVERY day in the month
+            # month_name = MONTH_NAMES_LIST[_month] if _month else ''
+            # last_day_of_month = _cal.monthrange(_year, _month)[1]
+            # graph_data = []
+            # for day_num in range(1, last_day_of_month + 1):
+            #     row = daily_lookup.get(day_num, {'staked': Decimal('0'), 'won': Decimal('0'), 'spins': 0})
+            #     graph_data.append({
+            #         'day': day_num,
+            #         'month': month_name,
+            #         'year': _year,
+            #         'staked': str(row['staked']),
+            #         'won': str(row['won']),
+            #         'ggr': str(row['staked'] - row['won']),
+            #         'spins': row['spins'],
+            #     })
+        else:
+            # Monthly aggregation — every month of the year included (zeros for no activity)
+            # Replace the existing monthly_qs block with:
+            ngn_monthly = (
+                ngn_spins
+                .annotate(month=TruncMonth('created_at'))
+                .values('month')
+                .annotate(staked=Sum('stake_amount'), won=Sum('payout_amount'),
+                          spin_count=Count('id'))
+            )
+            usdt_monthly = (
+                usdt_spins
+                .annotate(month=TruncMonth('created_at'))
+                .values('month')
+                .annotate(staked=Sum('stake_amount'), won=Sum('payout_amount'),
+                          spin_count=Count('id'))
+            )
+
+            ngn_m_lookup = {}
+            for row in ngn_monthly:
+                if row['month']:
+                    ngn_m_lookup[row['month'].month] = {
+                        'staked': row['staked'] or Decimal('0'),
+                        'won': row['won'] or Decimal('0'),
+                        'spins': row['spin_count'],
+                    }
+            usdt_m_lookup = {}
+            for row in usdt_monthly:
+                if row['month']:
+                    usdt_m_lookup[row['month'].month] = {
+                        'staked': row['staked'] or Decimal('0'),
+                        'won': row['won'] or Decimal('0'),
+                        'spins': row['spin_count'],
+                    }
+
             graph_data = []
             for m_num in range(1, 13):
-                row = monthly_lookup.get(m_num, {'staked': Decimal('0'), 'won': Decimal('0'), 'spins': 0})
+                ngn_row = ngn_m_lookup.get(m_num, {
+                    'staked': Decimal('0'), 'won': Decimal('0'), 'spins': 0,
+                })
+                usdt_row = usdt_m_lookup.get(m_num, {
+                    'staked': Decimal('0'), 'won': Decimal('0'), 'spins': 0,
+                })
                 graph_data.append({
-                    'month': MONTH_NAMES_LIST[m_num][:3],  # "Jan", "Feb" etc.
+                    'month': MONTH_NAMES_LIST[m_num][:3],
                     'month_full': MONTH_NAMES_LIST[m_num],
                     'month_num': m_num,
                     'year': _year,
-                    'staked': str(row['staked']),
-                    'won': str(row['won']),
-                    'ggr': str(row['staked'] - row['won']),
-                    'spins': row['spins'],
+                    'ngn': {
+                        'staked': str(ngn_row['staked']),
+                        'won': str(ngn_row['won']),
+                        'ggr': str(ngn_row['staked'] - ngn_row['won']),
+                        'spins': ngn_row['spins'],
+                    },
+                    'usdt': {
+                        'staked': str(usdt_row['staked']),
+                        'won': str(usdt_row['won']),
+                        'ggr': str(usdt_row['staked'] - usdt_row['won']),
+                        'spins': usdt_row['spins'],
+                    },
                 })
+            # monthly_qs = (
+            #     spins_qs
+            #     .annotate(month=TruncMonth('created_at'))
+            #     .values('month')
+            #     .annotate(
+            #         staked=Sum('stake_amount'),
+            #         won=Sum('payout_amount'),
+            #         spin_count=Count('id'),
+            #     )
+            # )
+            # # Build lookup: month_number → data
+            # monthly_lookup = {}
+            # for row in monthly_qs:
+            #     if row['month']:
+            #         m_staked = row['staked'] or Decimal('0')
+            #         m_won = row['won'] or Decimal('0')
+            #         monthly_lookup[row['month'].month] = {
+            #             'staked': m_staked,
+            #             'won': m_won,
+            #             'spins': row['spin_count'],
+            #         }
+
+            # # Generate entry for EVERY month (1-12)
+            # graph_data = []
+            # for m_num in range(1, 13):
+            #     row = monthly_lookup.get(m_num, {'staked': Decimal('0'), 'won': Decimal('0'), 'spins': 0})
+            #     graph_data.append({
+            #         'month': MONTH_NAMES_LIST[m_num][:3],  # "Jan", "Feb" etc.
+            #         'month_full': MONTH_NAMES_LIST[m_num],
+            #         'month_num': m_num,
+            #         'year': _year,
+            #         'staked': str(row['staked']),
+            #         'won': str(row['won']),
+            #         'ggr': str(row['staked'] - row['won']),
+            #         'spins': row['spins'],
+            #     })
 
         # ── Recent Spins (last 10) ────────────────────────────────────
         recent_spins = []
@@ -305,23 +510,57 @@ class DashboardView(APIView):
             })
 
         # ── Top Winners ────────────────────────────────────────────────
-        top_winners = []
-        top_qs = (
-            spins_qs.filter(outcome='win')
+        # Top winners — separate leaderboards per currency
+        ngn_top = (
+            ngn_spins.filter(outcome='win')
             .values('user_id')
             .annotate(total_won=Sum('payout_amount'))
             .order_by('-total_won')[:10]
         )
-        for row in top_qs:
+        usdt_top = (
+            usdt_spins.filter(outcome='win')
+            .values('user_id')
+            .annotate(total_won=Sum('payout_amount'))
+            .order_by('-total_won')[:10]
+        )
+
+        top_winners_ngn = []
+        for row in ngn_top:
             try:
                 u = User.objects.get(id=row['user_id'])
-                top_winners.append({
+                top_winners_ngn.append({
                     'user': format_user(u),
                     'win_value': str(row['total_won']),
                 })
             except User.DoesNotExist:
                 pass
 
+        top_winners_usdt = []
+        for row in usdt_top:
+            try:
+                u = User.objects.get(id=row['user_id'])
+                top_winners_usdt.append({
+                    'user': format_user(u),
+                    'win_value': str(row['total_won']),
+                })
+            except User.DoesNotExist:
+                pass
+        # top_winners = []
+        # top_qs = (
+        #     spins_qs.filter(outcome='win')
+        #     .values('user_id')
+        #     .annotate(total_won=Sum('payout_amount'))
+        #     .order_by('-total_won')[:10]
+        # )
+        # for row in top_qs:
+        #     try:
+        #         u = User.objects.get(id=row['user_id'])
+        #         top_winners.append({
+        #             'user': format_user(u),
+        #             'win_value': str(row['total_won']),
+        #         })
+        #     except User.DoesNotExist:
+        #         pass
         return Response({
             'success': True,
             'data': {
@@ -329,11 +568,24 @@ class DashboardView(APIView):
                 'year': _year,
                 'month': MONTH_NAMES_LIST[_month] if _month and 1 <= _month <= 12 else None,
                 'kpis': {
-                    'total_revenue': str(total_staked),
-                    'total_revenue_change_pct': revenue_change,
-                    'net_profit_ggr': str(ggr),
-                    'net_profit_ggr_change_pct': ggr_change,
-                    'realized_house_edge_pct': str(realized_house_edge),
+                    # Per-currency financial KPIs (NEVER summed)
+                    'ngn': {
+                        'total_revenue': str(ngn_staked),
+                        'total_revenue_change_pct': ngn_revenue_change,
+                        'net_profit_ggr': str(ngn_ggr),
+                        'net_profit_ggr_change_pct': ngn_ggr_change,
+                        'realized_house_edge_pct': str(ngn_house_edge),
+                        'total_won_by_players': str(ngn_won),
+                    },
+                    'usdt': {
+                        'total_revenue': str(usdt_staked),
+                        'total_revenue_change_pct': usdt_revenue_change,
+                        'net_profit_ggr': str(usdt_ggr),
+                        'net_profit_ggr_change_pct': usdt_ggr_change,
+                        'realized_house_edge_pct': str(usdt_house_edge),
+                        'total_won_by_players': str(usdt_won),
+                    },
+                    # Currency-agnostic operational metrics
                     'player_win_rate_pct': str(player_win_rate),
                     'total_spins': total_spins,
                     'winning_spins': winning_spins,
@@ -342,9 +594,36 @@ class DashboardView(APIView):
                 },
                 'graph': graph_data,
                 'recent_spins': recent_spins,
-                'top_winners': top_winners,
+                'top_winners': {
+                    'ngn': top_winners_ngn,
+                    'usdt': top_winners_usdt,
+                },
             },
         })
+
+        # return Response({
+        #     'success': True,
+        #     'data': {
+        #         'period': 'month' if use_daily else 'year',
+        #         'year': _year,
+        #         'month': MONTH_NAMES_LIST[_month] if _month and 1 <= _month <= 12 else None,
+        #         'kpis': {
+        #             'total_revenue': str(total_staked),
+        #             'total_revenue_change_pct': revenue_change,
+        #             'net_profit_ggr': str(ggr),
+        #             'net_profit_ggr_change_pct': ggr_change,
+        #             'realized_house_edge_pct': str(realized_house_edge),
+        #             'player_win_rate_pct': str(player_win_rate),
+        #             'total_spins': total_spins,
+        #             'winning_spins': winning_spins,
+        #             'active_users': active_users,
+        #             'new_users_today': new_today,
+        #         },
+        #         'graph': graph_data,
+        #         'recent_spins': recent_spins,
+        #         'top_winners': top_winners,
+        #     },
+        # })
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -457,60 +736,172 @@ class FinancialsView(APIView):
             })
 
         # ── 1. DEPOSITS ────────────────────────────────────────────────
-        dep_qs = _filter(
-            Transaction.objects.filter(type='deposit', status='completed')
-        )
-        total_deposit_amount = dep_qs.aggregate(t=Sum('amount'))['t'] or Decimal('0')
-        total_deposit_count = dep_qs.count()
-        avg_deposit = (
-            total_deposit_amount / total_deposit_count
-            if total_deposit_count else Decimal('0')
-        )
+        # ── 1. DEPOSITS (per-currency — Transaction.currency tracks NGN/USDT) ──
+        # Filter Transaction by currency (added in Chunk 1)
+        dep_base = Transaction.objects.filter(type='deposit', status='completed')
 
-        prev_dep_amount = _prev_qs(
-            Transaction.objects.filter(type='deposit', status='completed')
-        ).aggregate(t=Sum('amount'))['t'] or Decimal('0')
+        # NGN deposits
+        ngn_dep_qs = _filter(dep_base.filter(currency='NGN'))
+        ngn_dep_amount = ngn_dep_qs.aggregate(t=Sum('amount'))['t'] or Decimal('0')
+        ngn_dep_count = ngn_dep_qs.count()
+        ngn_avg_dep = (
+            ngn_dep_amount / ngn_dep_count if ngn_dep_count else Decimal('0')
+        )
+        prev_ngn_dep = _prev_qs(dep_base.filter(currency='NGN')).aggregate(
+            t=Sum('amount')
+        )['t'] or Decimal('0')
 
-        # Net position = all deposits - all withdrawals (all time)
-        total_deposited_ever = Transaction.objects.filter(
-            type='deposit', status='completed'
-        ).aggregate(t=Sum('amount'))['t'] or Decimal('0')
-        total_withdrawn_ever = Withdrawal.objects.filter(
-            status='completed'
+        # USDT deposits
+        usdt_dep_qs = _filter(dep_base.filter(currency='USDT'))
+        usdt_dep_amount = usdt_dep_qs.aggregate(t=Sum('amount'))['t'] or Decimal('0')
+        usdt_dep_count = usdt_dep_qs.count()
+        usdt_avg_dep = (
+            usdt_dep_amount / usdt_dep_count if usdt_dep_count else Decimal('0')
+        )
+        prev_usdt_dep = _prev_qs(dep_base.filter(currency='USDT')).aggregate(
+            t=Sum('amount')
+        )['t'] or Decimal('0')
+
+        # Net position — per currency (deposits - withdrawals, all time)
+        all_ngn_deposits = dep_base.filter(currency='NGN').aggregate(
+            t=Sum('amount')
+        )['t'] or Decimal('0')
+        all_usdt_deposits = dep_base.filter(currency='USDT').aggregate(
+            t=Sum('amount')
+        )['t'] or Decimal('0')
+        all_ngn_withdrawals = Withdrawal.objects.filter(
+            currency='NGN', status='completed',
         ).aggregate(t=Sum('net_amount'))['t'] or Decimal('0')
-        net_position = total_deposited_ever - total_withdrawn_ever
+        all_usdt_withdrawals = Withdrawal.objects.filter(
+            currency='USDT', status='completed',
+        ).aggregate(t=Sum('net_amount'))['t'] or Decimal('0')
+        net_position_ngn = all_ngn_deposits - all_ngn_withdrawals
+        net_position_usdt = all_usdt_deposits - all_usdt_withdrawals
+        # dep_qs = _filter(
+        #     Transaction.objects.filter(type='deposit', status='completed')
+        # )
+        # total_deposit_amount = dep_qs.aggregate(t=Sum('amount'))['t'] or Decimal('0')
+        # total_deposit_count = dep_qs.count()
+        # avg_deposit = (
+        #     total_deposit_amount / total_deposit_count
+        #     if total_deposit_count else Decimal('0')
+        # )
+
+        # prev_dep_amount = _prev_qs(
+        #     Transaction.objects.filter(type='deposit', status='completed')
+        # ).aggregate(t=Sum('amount'))['t'] or Decimal('0')
+
+        # # Net position = all deposits - all withdrawals (all time)
+        # total_deposited_ever = Transaction.objects.filter(
+        #     type='deposit', status='completed'
+        # ).aggregate(t=Sum('amount'))['t'] or Decimal('0')
+        # total_withdrawn_ever = Withdrawal.objects.filter(
+        #     status='completed'
+        # ).aggregate(t=Sum('net_amount'))['t'] or Decimal('0')
+        # net_position = total_deposited_ever - total_withdrawn_ever
 
         # ── 2. WITHDRAWALS ─────────────────────────────────────────────
-        wd_qs = _filter(
-            Withdrawal.objects.filter(status='completed'), date_field='completed_at'
-        )
-        total_wd_amount = wd_qs.aggregate(t=Sum('net_amount'))['t'] or Decimal('0')
-        total_wd_count = wd_qs.count()
+        # ── 2. WITHDRAWALS (per-currency) ──────────────────────────────
+        wd_base = Withdrawal.objects.filter(status='completed')
 
-        prev_wd_amount = _prev_qs(
-            Withdrawal.objects.filter(status='completed'), date_field='completed_at'
+        # NGN withdrawals
+        ngn_wd_qs = _filter(
+            wd_base.filter(currency='NGN'), date_field='completed_at',
+        )
+        ngn_wd_amount = ngn_wd_qs.aggregate(t=Sum('net_amount'))['t'] or Decimal('0')
+        ngn_wd_count = ngn_wd_qs.count()
+        prev_ngn_wd = _prev_qs(
+            wd_base.filter(currency='NGN'), date_field='completed_at',
         ).aggregate(t=Sum('net_amount'))['t'] or Decimal('0')
 
-        pct_of_deposits = (
-            round(float(total_wd_amount / total_deposit_amount) * 100, 1)
-            if total_deposit_amount > 0 else 0
+        # USDT withdrawals
+        usdt_wd_qs = _filter(
+            wd_base.filter(currency='USDT'), date_field='completed_at',
+        )
+        usdt_wd_amount = usdt_wd_qs.aggregate(
+            t=Sum('net_amount')
+        )['t'] or Decimal('0')
+        usdt_wd_count = usdt_wd_qs.count()
+        prev_usdt_wd = _prev_qs(
+            wd_base.filter(currency='USDT'), date_field='completed_at',
+        ).aggregate(t=Sum('net_amount'))['t'] or Decimal('0')
+
+        # % of deposits — per currency
+        ngn_pct_of_dep = (
+            round(float(ngn_wd_amount / ngn_dep_amount) * 100, 1)
+            if ngn_dep_amount > 0 else 0
+        )
+        usdt_pct_of_dep = (
+            round(float(usdt_wd_amount / usdt_dep_amount) * 100, 1)
+            if usdt_dep_amount > 0 else 0
         )
 
-        pending_wd_amount = Withdrawal.objects.filter(
+        # Pending — per currency
+        pending_base = Withdrawal.objects.filter(
             status__in=['pending_review', 'pending', 'processing'],
-        ).aggregate(t=Sum('amount'))['t'] or Decimal('0')
-        pending_wd_count = Withdrawal.objects.filter(
-            status='pending_review',
+        )
+        ngn_pending_amount = pending_base.filter(currency='NGN').aggregate(
+            t=Sum('amount')
+        )['t'] or Decimal('0')
+        usdt_pending_amount = pending_base.filter(currency='USDT').aggregate(
+            t=Sum('amount')
+        )['t'] or Decimal('0')
+
+        ngn_pending_count = Withdrawal.objects.filter(
+            currency='NGN', status='pending_review',
+        ).count()
+        usdt_pending_count = Withdrawal.objects.filter(
+            currency='USDT', status='pending_review',
         ).count()
 
-        # Rate of successful withdrawals
-        all_wd = _filter(Withdrawal.objects.all(), date_field='requested_at')
-        all_wd_count = all_wd.count()
-        success_rate = (
-            round((total_wd_count / all_wd_count) * 100, 1)
-            if all_wd_count else 0
+        # Success rate per currency
+        ngn_all = _filter(
+            Withdrawal.objects.filter(currency='NGN'),
+            date_field='requested_at',
         )
+        ngn_success_rate = (
+            round((ngn_wd_count / ngn_all.count()) * 100, 1)
+            if ngn_all.count() else 0
+        )
+        usdt_all = _filter(
+            Withdrawal.objects.filter(currency='USDT'),
+            date_field='requested_at',
+        )
+        usdt_success_rate = (
+            round((usdt_wd_count / usdt_all.count()) * 100, 1)
+            if usdt_all.count() else 0
+        )
+        # wd_qs = _filter(
+        #     Withdrawal.objects.filter(status='completed'), date_field='completed_at'
+        # )
+        # total_wd_amount = wd_qs.aggregate(t=Sum('net_amount'))['t'] or Decimal('0')
+        # total_wd_count = wd_qs.count()
 
+        # prev_wd_amount = _prev_qs(
+        #     Withdrawal.objects.filter(status='completed'), date_field='completed_at'
+        # ).aggregate(t=Sum('net_amount'))['t'] or Decimal('0')
+
+        # pct_of_deposits = (
+        #     round(float(total_wd_amount / total_deposit_amount) * 100, 1)
+        #     if total_deposit_amount > 0 else 0
+        # )
+
+        # pending_wd_amount = Withdrawal.objects.filter(
+        #     status__in=['pending_review', 'pending', 'processing'],
+        # ).aggregate(t=Sum('amount'))['t'] or Decimal('0')
+        # pending_wd_count = Withdrawal.objects.filter(
+        #     status='pending_review',
+        # ).count()
+
+        # # Rate of successful withdrawals
+        # all_wd = _filter(Withdrawal.objects.all(), date_field='requested_at')
+        # all_wd_count = all_wd.count()
+        # success_rate = (
+        #     round((total_wd_count / all_wd_count) * 100, 1)
+        #     if all_wd_count else 0
+        # )
+
+        # ── 3. SPINS ──────────────────────────────────────────────────
         # ── 3. SPINS ──────────────────────────────────────────────────
         spins_qs = _filter(Spin.objects.all())
         total_spins = spins_qs.count()
@@ -518,29 +909,103 @@ class FinancialsView(APIView):
         losses_count = spins_qs.filter(outcome='loss').count()
         win_rate = round((wins_count / total_spins) * 100, 1) if total_spins else 0
 
-        spins_staked = spins_qs.aggregate(t=Sum('stake_amount'))['t'] or Decimal('0')
-        avg_stake_per_spin = (
-            spins_staked / total_spins if total_spins else Decimal('0')
+        # Split spins by source currency
+        ngn_spins = spins_qs.filter(
+            Q(source_wallet='naira_coins') |
+            Q(source_wallet='bonus_coins', bonus_destination='naira')
         )
+        usdt_spins = spins_qs.filter(
+            Q(source_wallet='crypto_coins') |
+            Q(source_wallet='bonus_coins', bonus_destination='crypto')
+        )
+
+        ngn_staked = ngn_spins.aggregate(t=Sum('stake_amount'))['t'] or Decimal('0')
+        usdt_staked = usdt_spins.aggregate(t=Sum('stake_amount'))['t'] or Decimal('0')
+
+        ngn_spin_count = ngn_spins.count()
+        usdt_spin_count = usdt_spins.count()
+
+        ngn_avg_stake = (
+            ngn_staked / ngn_spin_count if ngn_spin_count else Decimal('0')
+        )
+        usdt_avg_stake = (
+            usdt_staked / usdt_spin_count if usdt_spin_count else Decimal('0')
+        )
+        # spins_qs = _filter(Spin.objects.all())
+        # total_spins = spins_qs.count()
+        # wins_count = spins_qs.filter(outcome='win').count()
+        # losses_count = spins_qs.filter(outcome='loss').count()
+        # win_rate = round((wins_count / total_spins) * 100, 1) if total_spins else 0
+
+        # spins_staked = spins_qs.aggregate(t=Sum('stake_amount'))['t'] or Decimal('0')
+        # avg_stake_per_spin = (
+        #     spins_staked / total_spins if total_spins else Decimal('0')
+        # )
 
         # ── 4. GGR ────────────────────────────────────────────────────
-        total_won_amount = spins_qs.filter(
-            outcome='win'
-        ).aggregate(t=Sum('payout_amount'))['t'] or Decimal('0')
-        ggr_amount = spins_staked - total_won_amount
-        ggr_margin = (
-            round(float(ggr_amount / spins_staked) * 100, 2)
-            if spins_staked > 0 else 0
+        # ── 4. GGR (per currency) ─────────────────────────────────────
+        ngn_won = ngn_spins.filter(outcome='win').aggregate(
+            t=Sum('payout_amount')
+        )['t'] or Decimal('0')
+        usdt_won = usdt_spins.filter(outcome='win').aggregate(
+            t=Sum('payout_amount')
+        )['t'] or Decimal('0')
+
+        ngn_ggr_amount = ngn_staked - ngn_won
+        usdt_ggr_amount = usdt_staked - usdt_won
+
+        ngn_ggr_margin = (
+            round(float(ngn_ggr_amount / ngn_staked) * 100, 2)
+            if ngn_staked > 0 else 0
+        )
+        usdt_ggr_margin = (
+            round(float(usdt_ggr_amount / usdt_staked) * 100, 2)
+            if usdt_staked > 0 else 0
         )
 
+        # Previous period for GGR change
         prev_spins_qs = _prev_qs(Spin.objects.all())
-        prev_staked = prev_spins_qs.aggregate(
+        prev_ngn_spins = prev_spins_qs.filter(
+            Q(source_wallet='naira_coins') |
+            Q(source_wallet='bonus_coins', bonus_destination='naira')
+        )
+        prev_usdt_spins = prev_spins_qs.filter(
+            Q(source_wallet='crypto_coins') |
+            Q(source_wallet='bonus_coins', bonus_destination='crypto')
+        )
+
+        prev_ngn_staked = prev_ngn_spins.aggregate(
             t=Sum('stake_amount')
         )['t'] or Decimal('0')
-        prev_won = prev_spins_qs.filter(
-            outcome='win'
-        ).aggregate(t=Sum('payout_amount'))['t'] or Decimal('0')
-        prev_ggr = prev_staked - prev_won
+        prev_ngn_won = prev_ngn_spins.filter(outcome='win').aggregate(
+            t=Sum('payout_amount')
+        )['t'] or Decimal('0')
+        prev_ngn_ggr = prev_ngn_staked - prev_ngn_won
+
+        prev_usdt_staked = prev_usdt_spins.aggregate(
+            t=Sum('stake_amount')
+        )['t'] or Decimal('0')
+        prev_usdt_won = prev_usdt_spins.filter(outcome='win').aggregate(
+            t=Sum('payout_amount')
+        )['t'] or Decimal('0')
+        prev_usdt_ggr = prev_usdt_staked - prev_usdt_won
+        # total_won_amount = spins_qs.filter(
+        #     outcome='win'
+        # ).aggregate(t=Sum('payout_amount'))['t'] or Decimal('0')
+        # ggr_amount = spins_staked - total_won_amount
+        # ggr_margin = (
+        #     round(float(ggr_amount / spins_staked) * 100, 2)
+        #     if spins_staked > 0 else 0
+        # )
+
+        # prev_spins_qs = _prev_qs(Spin.objects.all())
+        # prev_staked = prev_spins_qs.aggregate(
+        #     t=Sum('stake_amount')
+        # )['t'] or Decimal('0')
+        # prev_won = prev_spins_qs.filter(
+        #     outcome='win'
+        # ).aggregate(t=Sum('payout_amount'))['t'] or Decimal('0')
+        # prev_ggr = prev_staked - prev_won
 
         # ── 5. CASH FLOW (filtered chart) ─────────────────────────────
         if use_daily:
@@ -552,31 +1017,83 @@ class FinancialsView(APIView):
             date_fmt = '%b'
             label_key = 'month'
 
-        dep_chart_qs = (
-            _filter(
-                Transaction.objects.filter(type='deposit', status='completed')
-            )
+        # dep_chart_qs = (
+        #     _filter(
+        #         Transaction.objects.filter(type='deposit', status='completed')
+        #     )
+        #     .annotate(period=trunc_fn('created_at'))
+        #     .values('period')
+        #     .annotate(count=Count('id'), total=Sum('amount'))
+        # )
+        # dep_lookup = {
+        #     row['period'].day if use_daily else row['period'].month: row
+        #     for row in dep_chart_qs if row['period']
+        # }
+        # NGN deposits chart
+        ngn_dep_chart = (
+            _filter(dep_base.filter(currency='NGN'))
             .annotate(period=trunc_fn('created_at'))
             .values('period')
             .annotate(count=Count('id'), total=Sum('amount'))
         )
-        dep_lookup = {
+        ngn_dep_chart_lookup = {
             row['period'].day if use_daily else row['period'].month: row
-            for row in dep_chart_qs if row['period']
+            for row in ngn_dep_chart if row['period']
         }
 
-        wd_chart_qs = (
+        # USDT deposits chart
+        usdt_dep_chart = (
+            _filter(dep_base.filter(currency='USDT'))
+            .annotate(period=trunc_fn('created_at'))
+            .values('period')
+            .annotate(count=Count('id'), total=Sum('amount'))
+        )
+        usdt_dep_chart_lookup = {
+            row['period'].day if use_daily else row['period'].month: row
+            for row in usdt_dep_chart if row['period']
+        }
+
+        # wd_chart_qs = (
+        #     _filter(
+        #         Withdrawal.objects.filter(status='completed'),
+        #         date_field='completed_at',
+        #     )
+        #     .annotate(period=trunc_fn('completed_at'))
+        #     .values('period')
+        #     .annotate(count=Count('id'), total=Sum('net_amount'))
+        # )
+        # wd_lookup = {
+        #     row['period'].day if use_daily else row['period'].month: row
+        #     for row in wd_chart_qs if row['period']
+        # }
+        # NGN withdrawals chart
+        ngn_wd_chart = (
             _filter(
-                Withdrawal.objects.filter(status='completed'),
+                wd_base.filter(currency='NGN'),
                 date_field='completed_at',
             )
             .annotate(period=trunc_fn('completed_at'))
             .values('period')
             .annotate(count=Count('id'), total=Sum('net_amount'))
         )
-        wd_lookup = {
+        ngn_wd_chart_lookup = {
             row['period'].day if use_daily else row['period'].month: row
-            for row in wd_chart_qs if row['period']
+            for row in ngn_wd_chart if row['period']
+        }
+
+        # USDT withdrawals chart
+        usdt_wd_chart = (
+            _filter(
+                wd_base.filter(currency='USDT'),
+                date_field='completed_at',
+            )
+            .annotate(period=trunc_fn('completed_at'))
+            .values('period')
+            .annotate(count=Count('id'), total=Sum('net_amount'))
+        )
+        usdt_wd_chart_lookup = {
+            row['period'].day if use_daily else row['period'].month: row
+            for row in usdt_wd_chart if row['period']
         }
 
         if use_daily:
@@ -588,59 +1105,164 @@ class FinancialsView(APIView):
 
         cash_flow_deposits = []
         cash_flow_withdrawals = []
+        cash_flow_ngn_deposits = []
+        cash_flow_ngn_withdrawals = []
+        cash_flow_usdt_deposits = []
+        cash_flow_usdt_withdrawals = []
         for key in _fin_range:
-            dep_row = dep_lookup.get(key, {})
-            wd_row  = wd_lookup.get(key, {})
             if use_daily:
                 label = {'day': key, 'month': _fin_mname, 'year': _year}
             else:
-                label = {'month': MONTH_NAMES_LIST[key][:3], 'month_num': key, 'year': _year}
+                label = {
+                    'month': MONTH_NAMES_LIST[key][:3],
+                    'month_num': key, 'year': _year,
+                }
 
-            cash_flow_deposits.append({
+            n_dep = ngn_dep_chart_lookup.get(key, {})
+            n_wd = ngn_wd_chart_lookup.get(key, {})
+            u_dep = usdt_dep_chart_lookup.get(key, {})
+            u_wd = usdt_wd_chart_lookup.get(key, {})
+
+            cash_flow_ngn_deposits.append({
                 **label,
-                'count': dep_row.get('count', 0),
-                'amount': str(dep_row.get('total') or 0),
+                'count': n_dep.get('count', 0),
+                'amount': str(n_dep.get('total') or 0),
             })
-            cash_flow_withdrawals.append({
+            cash_flow_ngn_withdrawals.append({
                 **label,
-                'count': wd_row.get('count', 0),
-                'amount': str(wd_row.get('total') or 0),
+                'count': n_wd.get('count', 0),
+                'amount': str(n_wd.get('total') or 0),
             })
+            cash_flow_usdt_deposits.append({
+                **label,
+                'count': u_dep.get('count', 0),
+                'amount': str(u_dep.get('total') or 0),
+            })
+            cash_flow_usdt_withdrawals.append({
+                **label,
+                'count': u_wd.get('count', 0),
+                'amount': str(u_wd.get('total') or 0),
+            })
+        # for key in _fin_range:
+        #     dep_row = dep_lookup.get(key, {})
+        #     wd_row  = wd_lookup.get(key, {})
+        #     if use_daily:
+        #         label = {'day': key, 'month': _fin_mname, 'year': _year}
+        #     else:
+        #         label = {'month': MONTH_NAMES_LIST[key][:3], 'month_num': key, 'year': _year}
+
+        #     cash_flow_deposits.append({
+        #         **label,
+        #         'count': dep_row.get('count', 0),
+        #         'amount': str(dep_row.get('total') or 0),
+        #     })
+        #     cash_flow_withdrawals.append({
+        #         **label,
+        #         'count': wd_row.get('count', 0),
+        #         'amount': str(wd_row.get('total') or 0),
+        #     })
 
         # ── 6. SPIN BREAKDOWN ─────────────────────────────────────────
         spin_breakdown = {
-            'total_ggr': str(ggr_amount),
-            'total_won_by_players': str(total_won_amount),
-            'total_staked': str(spins_staked),
+            'ngn': {
+                'total_ggr': str(ngn_ggr_amount),
+                'total_won_by_players': str(ngn_won),
+                'total_staked': str(ngn_staked),
+            },
+            'usdt': {
+                'total_ggr': str(usdt_ggr_amount),
+                'total_won_by_players': str(usdt_won),
+                'total_staked': str(usdt_staked),
+            },
         }
+        # spin_breakdown = {
+        #     'total_ggr': str(ggr_amount),
+        #     'total_won_by_players': str(total_won_amount),
+        #     'total_staked': str(spins_staked),
+        # }
 
         # ── 7. GGR TREND (filtered) ───────────────────────────────────
-        ggr_trend_qs = (
-            spins_qs
+        # NGN GGR trend
+        ngn_ggr_trend_qs = (
+            ngn_spins
             .annotate(period=trunc_fn('created_at'))
             .values('period')
             .annotate(staked=Sum('stake_amount'), won=Sum('payout_amount'))
         )
-        ggr_lookup = {
+        ngn_ggr_lookup = {
             row['period'].day if use_daily else row['period'].month: row
-            for row in ggr_trend_qs if row['period']
+            for row in ngn_ggr_trend_qs if row['period']
         }
 
-        ggr_trend = []
+        # USDT GGR trend
+        usdt_ggr_trend_qs = (
+            usdt_spins
+            .annotate(period=trunc_fn('created_at'))
+            .values('period')
+            .annotate(staked=Sum('stake_amount'), won=Sum('payout_amount'))
+        )
+        usdt_ggr_lookup = {
+            row['period'].day if use_daily else row['period'].month: row
+            for row in usdt_ggr_trend_qs if row['period']
+        }
+
+        ngn_ggr_trend = []
+        usdt_ggr_trend = []
         for key in _fin_range:
-            row = ggr_lookup.get(key, {})
-            g_staked = row.get('staked') or Decimal('0')
-            g_won    = row.get('won') or Decimal('0')
             if use_daily:
                 label = {'day': key, 'month': _fin_mname, 'year': _year}
             else:
-                label = {'month': MONTH_NAMES_LIST[key][:3], 'month_num': key, 'year': _year}
-            ggr_trend.append({
+                label = {
+                    'month': MONTH_NAMES_LIST[key][:3],
+                    'month_num': key, 'year': _year,
+                }
+
+            n_row = ngn_ggr_lookup.get(key, {})
+            n_st = n_row.get('staked') or Decimal('0')
+            n_won = n_row.get('won') or Decimal('0')
+
+            u_row = usdt_ggr_lookup.get(key, {})
+            u_st = u_row.get('staked') or Decimal('0')
+            u_won = u_row.get('won') or Decimal('0')
+
+            ngn_ggr_trend.append({
                 **label,
-                'ggr': str(g_staked - g_won),
-                'staked': str(g_staked),
-                'won': str(g_won),
+                'ggr': str(n_st - n_won),
+                'staked': str(n_st),
+                'won': str(n_won),
             })
+            usdt_ggr_trend.append({
+                **label,
+                'ggr': str(u_st - u_won),
+                'staked': str(u_st),
+                'won': str(u_won),
+            })
+        # ggr_trend_qs = (
+        #     spins_qs
+        #     .annotate(period=trunc_fn('created_at'))
+        #     .values('period')
+        #     .annotate(staked=Sum('stake_amount'), won=Sum('payout_amount'))
+        # )
+        # ggr_lookup = {
+        #     row['period'].day if use_daily else row['period'].month: row
+        #     for row in ggr_trend_qs if row['period']
+        # }
+
+        # ggr_trend = []
+        # for key in _fin_range:
+        #     row = ggr_lookup.get(key, {})
+        #     g_staked = row.get('staked') or Decimal('0')
+        #     g_won    = row.get('won') or Decimal('0')
+        #     if use_daily:
+        #         label = {'day': key, 'month': _fin_mname, 'year': _year}
+        #     else:
+        #         label = {'month': MONTH_NAMES_LIST[key][:3], 'month_num': key, 'year': _year}
+        #     ggr_trend.append({
+        #         **label,
+        #         'ggr': str(g_staked - g_won),
+        #         'staked': str(g_staked),
+        #         'won': str(g_won),
+        #     })
 
         return Response({
             'success': True,
@@ -649,57 +1271,160 @@ class FinancialsView(APIView):
                 'year': _year,
                 'month': MONTH_NAMES_LIST[_month] if _month and 1 <= _month <= 12 else None,
 
-                # Section 1 — Deposits
+                # Section 1 — Deposits (per currency)
                 'deposits': {
-                    'total_amount': str(total_deposit_amount),
-                    'total_amount_change_pct': pct_change(total_deposit_amount, prev_dep_amount),
-                    'total_transactions': total_deposit_count,
-                    'average_per_deposit': str(round(avg_deposit, 2)),
-                    'net_position': str(net_position),
+                    'ngn': {
+                        'total_amount': str(ngn_dep_amount),
+                        'total_amount_change_pct': pct_change(ngn_dep_amount, prev_ngn_dep),
+                        'total_transactions': ngn_dep_count,
+                        'average_per_deposit': str(round(ngn_avg_dep, 2)),
+                        'net_position': str(net_position_ngn),
+                    },
+                    'usdt': {
+                        'total_amount': str(usdt_dep_amount),
+                        'total_amount_change_pct': pct_change(usdt_dep_amount, prev_usdt_dep),
+                        'total_transactions': usdt_dep_count,
+                        'average_per_deposit': str(round(usdt_avg_dep, 2)),
+                        'net_position': str(net_position_usdt),
+                    },
                 },
 
-                # Section 2 — Withdrawals
+                # Section 2 — Withdrawals (per currency)
                 'withdrawals': {
-                    'total_amount': str(total_wd_amount),
-                    'total_amount_change_pct': pct_change(total_wd_amount, prev_wd_amount),
-                    'pct_of_deposits': str(pct_of_deposits),
-                    'pending_amount': str(pending_wd_amount),
-                    'pending_queue_count': pending_wd_count,
-                    'success_rate_pct': str(success_rate),
+                    'ngn': {
+                        'total_amount': str(ngn_wd_amount),
+                        'total_amount_change_pct': pct_change(ngn_wd_amount, prev_ngn_wd),
+                        'pct_of_deposits': str(ngn_pct_of_dep),
+                        'pending_amount': str(ngn_pending_amount),
+                        'pending_queue_count': ngn_pending_count,
+                        'success_rate_pct': str(ngn_success_rate),
+                    },
+                    'usdt': {
+                        'total_amount': str(usdt_wd_amount),
+                        'total_amount_change_pct': pct_change(usdt_wd_amount, prev_usdt_wd),
+                        'pct_of_deposits': str(usdt_pct_of_dep),
+                        'pending_amount': str(usdt_pending_amount),
+                        'pending_queue_count': usdt_pending_count,
+                        'success_rate_pct': str(usdt_success_rate),
+                    },
                 },
 
-                # Section 3 — Spins
+                # Section 3 — Spins (per currency where applicable)
                 'spins': {
                     'total_spins': total_spins,
                     'win_rate_pct': str(win_rate),
                     'wins_count': wins_count,
                     'losses_count': losses_count,
-                    'average_stake_per_spin': str(round(avg_stake_per_spin, 2)),
+                    'ngn': {
+                        'count': ngn_spin_count,
+                        'total_staked': str(ngn_staked),
+                        'avg_stake_per_spin': str(round(ngn_avg_stake, 2)),
+                    },
+                    'usdt': {
+                        'count': usdt_spin_count,
+                        'total_staked': str(usdt_staked),
+                        'avg_stake_per_spin': str(round(usdt_avg_stake, 2)),
+                    },
                 },
 
-                # Section 4 — GGR
+                # Section 4 — GGR (per currency)
                 'ggr': {
-                    'ggr_amount': str(ggr_amount),
-                    'ggr_change_pct': pct_change(ggr_amount, prev_ggr),
-                    'ggr_margin_pct': str(ggr_margin),
-                    'total_staked': str(spins_staked),
-                    'total_won': str(total_won_amount),
-                    'average_stake_per_spin': str(round(avg_stake_per_spin, 2)),
+                    'ngn': {
+                        'ggr_amount': str(ngn_ggr_amount),
+                        'ggr_change_pct': pct_change(ngn_ggr_amount, prev_ngn_ggr),
+                        'ggr_margin_pct': str(ngn_ggr_margin),
+                        'total_staked': str(ngn_staked),
+                        'total_won': str(ngn_won),
+                    },
+                    'usdt': {
+                        'ggr_amount': str(usdt_ggr_amount),
+                        'ggr_change_pct': pct_change(usdt_ggr_amount, prev_usdt_ggr),
+                        'ggr_margin_pct': str(usdt_ggr_margin),
+                        'total_staked': str(usdt_staked),
+                        'total_won': str(usdt_won),
+                    },
                 },
 
-                # Section 5 — Cash Flow chart
+                # Section 5 — Cash Flow (per currency)
                 'cash_flow': {
-                    'deposits': cash_flow_deposits,
-                    'withdrawals': cash_flow_withdrawals,
+                    'ngn': {
+                        'deposits': cash_flow_ngn_deposits,
+                        'withdrawals': cash_flow_ngn_withdrawals,
+                    },
+                    'usdt': {
+                        'deposits': cash_flow_usdt_deposits,
+                        'withdrawals': cash_flow_usdt_withdrawals,
+                    },
                 },
 
-                # Section 6 — Spin Breakdown
+                # Section 6 — Spin Breakdown (per currency)
                 'spin_breakdown': spin_breakdown,
 
-                # Section 7 — GGR Trend chart
-                'ggr_trend': ggr_trend,
+                # Section 7 — GGR Trend (per currency)
+                'ggr_trend': {
+                    'ngn': ngn_ggr_trend,
+                    'usdt': usdt_ggr_trend,
+                },
             },
         })
+        # return Response({
+        #     'success': True,
+        #     'data': {
+        #         'period': 'month' if use_daily else 'year',
+        #         'year': _year,
+        #         'month': MONTH_NAMES_LIST[_month] if _month and 1 <= _month <= 12 else None,
+
+        #         # Section 1 — Deposits
+        #         'deposits': {
+        #             'total_amount': str(total_deposit_amount),
+        #             'total_amount_change_pct': pct_change(total_deposit_amount, prev_dep_amount),
+        #             'total_transactions': total_deposit_count,
+        #             'average_per_deposit': str(round(avg_deposit, 2)),
+        #             'net_position': str(net_position),
+        #         },
+
+        #         # Section 2 — Withdrawals
+        #         'withdrawals': {
+        #             'total_amount': str(total_wd_amount),
+        #             'total_amount_change_pct': pct_change(total_wd_amount, prev_wd_amount),
+        #             'pct_of_deposits': str(pct_of_deposits),
+        #             'pending_amount': str(pending_wd_amount),
+        #             'pending_queue_count': pending_wd_count,
+        #             'success_rate_pct': str(success_rate),
+        #         },
+
+        #         # Section 3 — Spins
+        #         'spins': {
+        #             'total_spins': total_spins,
+        #             'win_rate_pct': str(win_rate),
+        #             'wins_count': wins_count,
+        #             'losses_count': losses_count,
+        #             'average_stake_per_spin': str(round(avg_stake_per_spin, 2)),
+        #         },
+
+        #         # Section 4 — GGR
+        #         'ggr': {
+        #             'ggr_amount': str(ggr_amount),
+        #             'ggr_change_pct': pct_change(ggr_amount, prev_ggr),
+        #             'ggr_margin_pct': str(ggr_margin),
+        #             'total_staked': str(spins_staked),
+        #             'total_won': str(total_won_amount),
+        #             'average_stake_per_spin': str(round(avg_stake_per_spin, 2)),
+        #         },
+
+        #         # Section 5 — Cash Flow chart
+        #         'cash_flow': {
+        #             'deposits': cash_flow_deposits,
+        #             'withdrawals': cash_flow_withdrawals,
+        #         },
+
+        #         # Section 6 — Spin Breakdown
+        #         'spin_breakdown': spin_breakdown,
+
+        #         # Section 7 — GGR Trend chart
+        #         'ggr_trend': ggr_trend,
+        #     },
+        # })
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1029,7 +1754,6 @@ class AdminUserDetailView(APIView):
     Full user profile card: name, ID, registered on, balance, staked, KYC, risk, bank.
     """
     permission_classes = [IsAdminUser]
-
     def get(self, request, user_id):
         try:
             user = User.objects.get(id=user_id)
@@ -1039,7 +1763,7 @@ class AdminUserDetailView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        # KYC
+        # ─── KYC ─────────────────────────────────────────────────────
         kyc_data = {'overall_status': 'unverified'}
         try:
             kyc = user.kyc_profile
@@ -1060,27 +1784,45 @@ class AdminUserDetailView(APIView):
         except Exception:
             pass
 
-        # Active bank account
-        bank_data = None
+        # ─── Bank accounts (ALL active, not just one) ────────────────
+        bank_accounts = []
         try:
             from apps.kyc.models import BankAccount
-            bank = BankAccount.objects.filter(user=user, is_active=True).first()
-            if bank:
-                bank_data = {
-                    'bank_name': bank.bank_name,
-                    'account_name': bank.account_name,
-                    'account_number_masked': f'****{bank.account_number[-4:]}',
+            for ba in BankAccount.objects.filter(user=user, is_active=True):
+                bank_accounts.append({
+                    'id': str(ba.id),
+                    'bank_name': ba.bank_name,
+                    'account_name': ba.account_name,
+                    'account_number_masked': f'****{ba.account_number[-4:]}',
+                    'is_default': ba.is_default,
                     'verified_at': (
-                        bank.verified_at.strftime('%b %-d, %Y')
-                        if bank.verified_at else None
+                        ba.verified_at.strftime('%b %-d, %Y')
+                        if ba.verified_at else None
                     ),
-                }
+                })
         except Exception:
             pass
 
-        # cash = get_user_balance(user, 'cash')
-        # coin = get_user_balance(user, 'coin')
-        # staked = get_user_balance(user, 'staked')
+        # ─── Crypto wallets (v3 — new for Chunk 4) ───────────────────
+        crypto_wallets = []
+        try:
+            from apps.withdrawals.models import CryptoWallet
+            for cw in CryptoWallet.objects.filter(user=user, is_active=True):
+                crypto_wallets.append({
+                    'id': str(cw.id),
+                    'network': cw.network,
+                    'address_masked': f'{cw.address[:6]}...{cw.address[-6:]}',
+                    'label': cw.label,
+                    'is_default': cw.is_default,
+                    'verified_at': (
+                        cw.verified_at.strftime('%b %-d, %Y')
+                        if cw.verified_at else None
+                    ),
+                })
+        except Exception:
+            pass
+
+        # ─── Wallet (v3 5-balance shape) ─────────────────────────────
         wallet_summary = WalletService.get_wallet_summary(user)
 
         return Response({
@@ -1096,26 +1838,118 @@ class AdminUserDetailView(APIView):
                     user.last_login.strftime('%b %-d, %Y %H:%M')
                     if user.last_login else None
                 ),
+
+                # v3: 5 spendable + withdrawable balances + staked
                 'wallet': {
-                    'deposit_coins': wallet_summary['deposit_coins'],
+                    'crypto_coins': wallet_summary['crypto_coins'],
+                    'naira_coins': wallet_summary['naira_coins'],
                     'bonus_coins': wallet_summary['bonus_coins'],
-                    'total_coins': wallet_summary['total_coins'],
-                    'earnings': wallet_summary['earnings'],
-                    'earnings_usd_equivalent': wallet_summary['earnings_usd_equivalent'],
+                    'crypto_withdraw_balance': wallet_summary['crypto_withdraw_balance'],
+                    'naira_withdraw_balance': wallet_summary['naira_withdraw_balance'],
                     'staked': wallet_summary['staked'],
                 },
 
-                # 'cash_balance': str(cash),
-                # 'coin_balance': str(coin),
-                # 'total_balance': str(cash + coin),
-                # 'staked': str(staked),
-                # 'kyc': kyc_data,
+                'kyc': kyc_data,
                 'risk': get_risk_level(user),
-                'bank_account': bank_data,
+
+                # Banking & crypto (v3)
+                'bank_accounts': bank_accounts,
+                'crypto_wallets': crypto_wallets,
+
+                # Backward-compat: singular bank_account (the default one)
+                'bank_account': bank_accounts[0] if bank_accounts else None,
+
                 'is_active': user.is_active,
                 'is_staff': user.is_staff,
             },
         })
+
+    # def get(self, request, user_id):
+    #     try:
+    #         user = User.objects.get(id=user_id)
+    #     except User.DoesNotExist:
+    #         return Response(
+    #             {'error': True, 'code': 'NOT_FOUND', 'message': 'User not found.'},
+    #             status=status.HTTP_404_NOT_FOUND,
+    #         )
+
+    #     # KYC
+    #     kyc_data = {'overall_status': 'unverified'}
+    #     try:
+    #         kyc = user.kyc_profile
+    #         kyc_data = {
+    #             'overall_status': kyc.overall_status,
+    #             'display_status': get_kyc_display(user),
+    #             'personal_info_status': kyc.personal_info_status,
+    #             'bank_account_status': kyc.bank_account_status,
+    #             'document_status': kyc.document_status,
+    #             'personal_info_reason': kyc.personal_info_reason,
+    #             'bank_account_reason': kyc.bank_account_reason,
+    #             'document_reason': kyc.document_reason,
+    #             'submitted_at': (
+    #                 kyc.submitted_at.strftime('%b %-d, %Y')
+    #                 if kyc.submitted_at else None
+    #             ),
+    #         }
+    #     except Exception:
+    #         pass
+
+    #     # Active bank account
+    #     bank_data = None
+    #     try:
+    #         from apps.kyc.models import BankAccount
+    #         bank = BankAccount.objects.filter(user=user, is_active=True).first()
+    #         if bank:
+    #             bank_data = {
+    #                 'bank_name': bank.bank_name,
+    #                 'account_name': bank.account_name,
+    #                 'account_number_masked': f'****{bank.account_number[-4:]}',
+    #                 'verified_at': (
+    #                     bank.verified_at.strftime('%b %-d, %Y')
+    #                     if bank.verified_at else None
+    #                 ),
+    #             }
+    #     except Exception:
+    #         pass
+
+    #     # cash = get_user_balance(user, 'cash')
+    #     # coin = get_user_balance(user, 'coin')
+    #     # staked = get_user_balance(user, 'staked')
+    #     wallet_summary = WalletService.get_wallet_summary(user)
+
+    #     return Response({
+    #         'success': True,
+    #         'data': {
+    #             'id': user.id,
+    #             'telegram_id': user.telegram_id,
+    #             'name': format_user(user),
+    #             'username': user.username or '',
+    #             'registered_on': user.created_at.strftime('%b %-d, %Y'),
+    #             'registered_via': 'Telegram',
+    #             'last_login': (
+    #                 user.last_login.strftime('%b %-d, %Y %H:%M')
+    #                 if user.last_login else None
+    #             ),
+    #             'wallet': {
+    #                 'deposit_coins': wallet_summary['deposit_coins'],
+    #                 'bonus_coins': wallet_summary['bonus_coins'],
+    #                 'total_coins': wallet_summary['total_coins'],
+    #                 'earnings': wallet_summary['earnings'],
+    #                 'earnings_usd_equivalent': wallet_summary['earnings_usd_equivalent'],
+    #                 'staked': wallet_summary['staked'],
+    #             },
+
+    #             # 'cash_balance': str(cash),
+    #             # 'coin_balance': str(coin),
+    #             # 'total_balance': str(cash + coin),
+    #             # 'staked': str(staked),
+    #             # 'kyc': kyc_data,
+    #             'risk': get_risk_level(user),
+    #             'bank_account': bank_data,
+    #             'is_active': user.is_active,
+    #             'is_staff': user.is_staff,
+    #         },
+    #     })
 
 
 class AdminUserSpinsView(APIView):
@@ -1273,24 +2107,33 @@ class AdminWithdrawalsListView(APIView):
       page
     """
     permission_classes = [IsAdminUser]
-
     def get(self, request):
         from apps.withdrawals.models import Withdrawal
 
-        # ── Overview stats ────────────────────────────────────────────
-        total_pending_amount = Withdrawal.objects.filter(
+        # ─── Overview stats — split per currency (D7.2) ─────────────────
+        # NGN side
+        ngn_qs = Withdrawal.objects.filter(currency=Withdrawal.Currency.NGN)
+        ngn_pending = ngn_qs.filter(
             status__in=['pending_review', 'pending', 'processing'],
         ).aggregate(t=Sum('amount'))['t'] or Decimal('0')
+        ngn_paid = ngn_qs.filter(status='completed').aggregate(
+            t=Sum('net_amount')
+        )['t'] or Decimal('0')
+        ngn_queued = ngn_qs.filter(status='pending_review').count()
 
-        total_paid_amount = Withdrawal.objects.filter(
-            status='completed',
-        ).aggregate(t=Sum('net_amount'))['t'] or Decimal('0')
+        # USDT side
+        usdt_qs = Withdrawal.objects.filter(currency=Withdrawal.Currency.USDT)
+        usdt_pending = usdt_qs.filter(
+            status__in=['pending_review', 'pending', 'processing'],
+        ).aggregate(t=Sum('amount'))['t'] or Decimal('0')
+        usdt_paid = usdt_qs.filter(status='completed').aggregate(
+            t=Sum('net_amount')
+        )['t'] or Decimal('0')
+        usdt_queued = usdt_qs.filter(status='pending_review').count()
 
-        queued_count = Withdrawal.objects.filter(
-            status='pending_review',
-        ).count()
+        total_queued = ngn_queued + usdt_queued  # OK to sum COUNTS (not amounts)
 
-        # ── Build query ───────────────────────────────────────────────
+        # ─── Build query with filters ───────────────────────────────────
         qs = Withdrawal.objects.select_related(
             'user', 'bank_account'
         ).order_by('-requested_at')
@@ -1307,33 +2150,81 @@ class AdminWithdrawalsListView(APIView):
         if filter_status:
             qs = qs.filter(status=filter_status)
 
-        # ── Paginate ──────────────────────────────────────────────────
+        # NEW v3: filter by rail
+        filter_rail = request.query_params.get('rail', '').strip()
+        if filter_rail in ('bank', 'crypto'):
+            qs = qs.filter(rail=filter_rail)
+
+        # NEW v3: filter by currency
+        filter_currency = request.query_params.get('currency', '').strip()
+        if filter_currency in ('NGN', 'USDT'):
+            qs = qs.filter(currency=filter_currency)
+
+        # ─── Paginate ──────────────────────────────────────────────────
         paginator = AdminPagination()
         page = paginator.paginate_queryset(qs, request)
 
-        def _amount_type(amount):
-            if amount < Decimal('10000'):
-                return 'Small'
-            elif amount < Decimal('50000'):
-                return 'Medium'
-            return 'Large'
+        def _amount_type(amount, currency):
+            """
+            Risk-bucket by amount, per currency. The thresholds differ
+            because NGN and USDT have wildly different magnitudes.
+            """
+            if currency == 'NGN':
+                if amount < Decimal('10000'):
+                    return 'Small'
+                elif amount < Decimal('50000'):
+                    return 'Medium'
+                return 'Large'
+            else:  # USDT
+                if amount < Decimal('20'):
+                    return 'Small'
+                elif amount < Decimal('100'):
+                    return 'Medium'
+                return 'Large'
 
         RISK_MAP = {'Small': 'Low', 'Medium': 'Medium', 'Large': 'High'}
 
         items = []
         for w in page:
-            amt_type = _amount_type(w.amount)
+            amt_type = _amount_type(w.amount, w.currency)
+
+            # Rail-aware destination display
+            if w.rail == 'bank':
+                destination = w.bank_account.bank_name if w.bank_account else ''
+                account_masked = (
+                    f'****{w.bank_account.account_number[-4:]}'
+                    if w.bank_account else ''
+                )
+            else:  # crypto
+                destination = f'{w.network} USDT'
+                account_masked = (
+                    f'{w.wallet_address[:6]}...{w.wallet_address[-6:]}'
+                    if w.wallet_address else ''
+                )
+
             items.append({
                 'id': str(w.id),
                 'name': format_user(w.user),
                 'user_id': w.user.id,
+
+                # v3: rail + currency
+                'rail': w.rail,
+                'currency': w.currency,
                 'amount': str(w.amount),
                 'net_amount': str(w.net_amount),
+
+                # Rail-aware destination
+                'destination': destination,
+                'account_masked': account_masked,
+
+                # Crypto-only fields (empty for bank)
+                'wallet_address': w.wallet_address,
+                'network': w.network,
+                'tx_hash': w.tx_hash,
+
+                # Bank-only (kept for backward compat with FE)
                 'bank': w.bank_account.bank_name if w.bank_account else '',
-                'account_masked': (
-                    f'****{w.bank_account.account_number[-4:]}'
-                    if w.bank_account else ''
-                ),
+
                 'type': amt_type,
                 'risk': RISK_MAP[amt_type],
                 'status': w.status,
@@ -1352,14 +2243,110 @@ class AdminWithdrawalsListView(APIView):
         return Response({
             'success': True,
             'data': {
+                # v3: per-currency overview (NGN and USDT NEVER summed)
                 'overview': {
-                    'total_pending': str(total_pending_amount),
-                    'total_paid': str(total_paid_amount),
-                    'queued': queued_count,
+                    'ngn': {
+                        'total_pending': str(ngn_pending),
+                        'total_paid': str(ngn_paid),
+                        'queued': ngn_queued,
+                    },
+                    'usdt': {
+                        'total_pending': str(usdt_pending),
+                        'total_paid': str(usdt_paid),
+                        'queued': usdt_queued,
+                    },
+                    'queued_total': total_queued,
                 },
                 **paginator.get_paginated_response_data(items),
             },
         })
+
+    # def get(self, request):
+    #     from apps.withdrawals.models import Withdrawal
+
+    #     # ── Overview stats ────────────────────────────────────────────
+    #     total_pending_amount = Withdrawal.objects.filter(
+    #         status__in=['pending_review', 'pending', 'processing'],
+    #     ).aggregate(t=Sum('amount'))['t'] or Decimal('0')
+
+    #     total_paid_amount = Withdrawal.objects.filter(
+    #         status='completed',
+    #     ).aggregate(t=Sum('net_amount'))['t'] or Decimal('0')
+
+    #     queued_count = Withdrawal.objects.filter(
+    #         status='pending_review',
+    #     ).count()
+
+    #     # ── Build query ───────────────────────────────────────────────
+    #     qs = Withdrawal.objects.select_related(
+    #         'user', 'bank_account'
+    #     ).order_by('-requested_at')
+
+    #     search = request.query_params.get('search', '').strip()
+    #     if search:
+    #         qs = qs.filter(
+    #             Q(user__first_name__icontains=search) |
+    #             Q(user__last_name__icontains=search) |
+    #             Q(user__username__icontains=search)
+    #         )
+
+    #     filter_status = request.query_params.get('status', '').strip()
+    #     if filter_status:
+    #         qs = qs.filter(status=filter_status)
+
+    #     # ── Paginate ──────────────────────────────────────────────────
+    #     paginator = AdminPagination()
+    #     page = paginator.paginate_queryset(qs, request)
+
+    #     def _amount_type(amount):
+    #         if amount < Decimal('10000'):
+    #             return 'Small'
+    #         elif amount < Decimal('50000'):
+    #             return 'Medium'
+    #         return 'Large'
+
+    #     RISK_MAP = {'Small': 'Low', 'Medium': 'Medium', 'Large': 'High'}
+
+    #     items = []
+    #     for w in page:
+    #         amt_type = _amount_type(w.amount)
+    #         items.append({
+    #             'id': str(w.id),
+    #             'name': format_user(w.user),
+    #             'user_id': w.user.id,
+    #             'amount': str(w.amount),
+    #             'net_amount': str(w.net_amount),
+    #             'bank': w.bank_account.bank_name if w.bank_account else '',
+    #             'account_masked': (
+    #                 f'****{w.bank_account.account_number[-4:]}'
+    #                 if w.bank_account else ''
+    #             ),
+    #             'type': amt_type,
+    #             'risk': RISK_MAP[amt_type],
+    #             'status': w.status,
+    #             'status_display': w.get_status_display(),
+    #             'requires_review': w.requires_review,
+    #             'forced_manual_review': w.forced_manual_review,
+    #             'reference': w.reference,
+    #             'failure_reason': w.failure_reason or '',
+    #             'requested_at': w.requested_at.strftime('%b %-d, %Y %H:%M'),
+    #             'completed_at': (
+    #                 w.completed_at.strftime('%b %-d, %Y %H:%M')
+    #                 if w.completed_at else None
+    #             ),
+    #         })
+
+    #     return Response({
+    #         'success': True,
+    #         'data': {
+    #             'overview': {
+    #                 'total_pending': str(total_pending_amount),
+    #                 'total_paid': str(total_paid_amount),
+    #                 'queued': queued_count,
+    #             },
+    #             **paginator.get_paginated_response_data(items),
+    #         },
+    #     })
 
 
 class AdminWithdrawalApproveView(APIView):
