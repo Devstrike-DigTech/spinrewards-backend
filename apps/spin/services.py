@@ -424,6 +424,7 @@ class SpinEngine:
             bonus_destination=bonus_destination if source_wallet == 'bonus_coins' else '',
             payout_currency=resolution_meta.get('payout_currency', ''),
             credited_balance=resolution_meta.get('credited_balance', ''),
+            net_credited=resolution_meta.get('net_credited', Decimal('0')),
             server_seed=server_seed,
             server_seed_hash=server_seed_hash,
             client_seed=client_seed,
@@ -654,6 +655,7 @@ class SpinEngine:
             return Spin.Outcome.LOSS, forfeit_tx, {
                 'payout_currency': '',
                 'credited_balance': '',
+                'net_credited': Decimal('0'),
             }
  
         # ─── PUSH (multiplier = 1) — refund stake to origin bucket ───────
@@ -684,6 +686,7 @@ class SpinEngine:
             return Spin.Outcome.PUSH, refund_tx, {
                 'payout_currency': '',  # not a real win
                 'credited_balance': source_balance_type,
+                'net_credited': stake_amount,
             }
  
         # ─── WIN OR PARTIAL — compute destination + credited amount ──────
@@ -771,4 +774,5 @@ class SpinEngine:
         return outcome, result_tx, {
             'payout_currency': payout_currency,
             'credited_balance': destination_balance_type,
+            'net_credited': credited_amount,
         }
