@@ -298,6 +298,18 @@ class Spin(models.Model):
             'For pushes: the origin coin bucket. Empty for losses.'
         ),
     )
+    net_credited = models.DecimalField(
+        max_digits=20, decimal_places=6,
+        default=Decimal('0'),
+        help_text=(
+            'Actual amount credited to credited_balance. '
+            'For wins/partials on bonus spins, this is the bonus-adjusted net '
+            '(gross × bonus_payout_rate × conversion_rate). '
+            'For naira/crypto wins, this equals payout_amount (100% rate). '
+            'For pushes, this is the stake refunded. '
+            'For losses, 0.'
+        ),
+    )
     # source_wallet = models.CharField(max_length=20,choices=[('deposit_coins', 'Deposit Coins'),('bonus_coins', 'Bonus Coins'),],default='deposit_coins',db_index=True,help_text='Which coin balance funded this spin. Determines payout rules.',)
     source_wallet = models.CharField(max_length=20, choices=SourceWallet.choices, default=SourceWallet.NAIRA_COINS, db_index=True, help_text='Which coin balance funded this spin. Determines payout rules.')
     bonus_destination = models.CharField(

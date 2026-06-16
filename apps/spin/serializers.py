@@ -200,6 +200,7 @@ class SpinPublicSerializer(serializers.ModelSerializer):
             'bonus_destination',
             'payout_currency',  
             'credited_balance',  
+            'net_credited',  
             'source_wallet',
             'outcome',
             'server_seed_hash',
