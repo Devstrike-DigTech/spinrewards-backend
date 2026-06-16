@@ -48,6 +48,7 @@ SUPPORTED_NOTIFICATION_TYPES = (
     'withdrawal_processing',
     'withdrawal_complete',
     'withdrawal_failed',
+    'withdrawal_cancelled',
     'kyc_approved',
     'kyc_rejected',
     'spin_win',
